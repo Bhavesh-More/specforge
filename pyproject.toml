@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "specforge"
+version = "0.1.0"
+description = "Offline-first reasoning orchestration framework"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic[email]>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.30.0",
+    "alembic>=1.13.0",
+    "redis[hiredis]>=5.0.0",
+    "celery>=5.4.0",
+    "structlog>=24.0.0",
+    "networkx>=3.3.0",
+    "jsonschema>=4.23.0",
+    "typer[all]>=0.14.0",
+    "httpx>=0.28.0",
+    "aiofiles>=24.0.0",
+    "python-dotenv>=1.0.0",
+    "psycopg2-binary>=2.9.0",
+]
+
+[project.scripts]
+specforge = "src.cli.main:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.25.0",
+    "respx>=0.22.0",
+    "factory-boy>=3.3.0",
+    "ruff>=0.8.0",
+    "mypy>=1.14.0",
+    "pre-commit>=4.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

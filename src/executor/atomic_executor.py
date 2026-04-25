@@ -1,0 +1,237 @@
+"""Ollama inference layer — execute atomic LLM nodes."""
+
+import httpx
+
+from src.core.config import SpecForgeConfig
+from src.core.exceptions import NodeExecutionError, OllamaConnectionError
+from src.core.logging import get_logger
+from src.executor.context_surgeon import ContextSurgeon
+from src.models.cognitive_template import DAGNode
+
+_log = get_logger(__name__)
+
+# ─── OllamaClient ──────────────────────────────────────────────────────────────
+
+
+class OllamaClient:
+    """Thin async HTTP client for the Ollama REST API.
+
+    Attributes:
+        base_url: Base URL of the Ollama instance (e.g. 'http://localhost:11434').
+        model: Model name to use for generation.
+        temperature: Sampling temperature (default 0.3).
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        temperature: float = 0.3,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.temperature = temperature
+        self._client: httpx.AsyncClient = httpx.AsyncClient(timeout=120.0)
+
+    async def generate(
+        self,
+        system_prompt: str,
+        user_message: str,
+        max_tokens: int = 512,
+        json_mode: bool = True,
+    ) -> str:
+        """Call Ollama ``/api/generate`` and return the text response.
+
+        Args:
+            system_prompt: The system-level specialist identity prompt.
+            user_message: The user prompt with interpolated variables.
+            max_tokens: Hard cap on generated tokens.
+            json_mode: If True, request JSON-formatted output.
+
+        Returns:
+            The raw ``response`` string from Ollama.
+
+        Raises:
+            OllamaConnectionError: If the request fails or times out.
+        """
+        payload: dict[str, object] = {
+            "model": self.model,
+            "system": system_prompt,
+            "prompt": user_message,
+            "stream": False,
+            "options": {
+                "temperature": self.temperature,
+                "num_predict": max_tokens,
+            },
+        }
+        if json_mode:
+            payload["format"] = "json"
+
+        try:
+            response = await self._client.post(
+                f"{self.base_url}/api/generate",
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("response", "")
+
+        except httpx.TimeoutException as exc:
+            _log.error("ollama_timeout", url=f"{self.base_url}/api/generate")
+            raise OllamaConnectionError(
+                base_url=self.base_url,
+                original_exc=exc,
+                context={"operation": "generate", "model": self.model},
+            )
+
+        except httpx.HTTPStatusError as exc:
+            _log.error(
+                "ollama_http_error",
+                status=exc.response.status_code,
+                url=f"{self.base_url}/api/generate",
+            )
+            raise OllamaConnectionError(
+                base_url=self.base_url,
+                original_exc=exc,
+                context={
+                    "operation": "generate",
+                    "model": self.model,
+                    "status": exc.response.status_code,
+                },
+            )
+
+        except httpx.RequestError as exc:
+            _log.error("ollama_request_error", url=f"{self.base_url}/api/generate")
+            raise OllamaConnectionError(
+                base_url=self.base_url,
+                original_exc=exc,
+                context={"operation": "generate", "model": self.model},
+            )
+
+    async def health_check(self) -> bool:
+        """Ping the Ollama ``/api/tags`` endpoint.
+
+        Returns:
+            True if the endpoint returns 200, False otherwise.
+        """
+        try:
+            response = await self._client.get(f"{self.base_url}/api/tags")
+            return response.status_code == 200
+        except (httpx.RequestError, httpx.TimeoutException):
+            return False
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._client.aclose()
+
+
+# ─── AtomicExecutor ────────────────────────────────────────────────────────────
+
+
+class AtomicExecutor:
+    """Execute a single atomic DAG node via Ollama with retry and error injection.
+
+    Attributes:
+        ollama_client: The OllamaClient instance to use for generation.
+        context_surgeon: The ContextSurgeon instance for building prompts.
+    """
+
+    def __init__(
+        self,
+        ollama_client: OllamaClient,
+        context_surgeon: ContextSurgeon,
+    ) -> None:
+        self._client = ollama_client
+        self._surgeon = context_surgeon
+
+    async def execute_node(
+        self,
+        node: DAGNode,
+        global_state: dict[str, Any],
+        input_data: dict[str, Any],
+        attempt_number: int = 1,
+        previous_error: str | None = None,
+    ) -> tuple[str, list[str]]:
+        """Execute a single atomic node and return its raw output.
+
+        Builds the prompt via ContextSurgeon, optionally appends a retry error
+        hint if this is not the first attempt, then calls Ollama.
+
+        Args:
+            node: The DAGNode to execute.
+            global_state: Accumulated outputs from previously executed nodes.
+            input_data: Top-level input payload for this run.
+            attempt_number: Which attempt this is (1 = first, 2+ = retry).
+            previous_error: Error message from the previous failed attempt.
+
+        Returns:
+            Tuple of (raw_output_string, rule_files_used).
+
+        Raises:
+            NodeExecutionError: If the Ollama call fails.
+        """
+        import time
+
+        system_prompt, user_message, rule_files = await self._surgeon.build_final_prompt(
+            node=node,
+            global_state=global_state,
+            input_data=input_data,
+        )
+
+        # Inject error feedback on retry attempts
+        if attempt_number > 1 and previous_error:
+            user_message = (
+                f"{user_message}\n\n⚠️ PREVIOUS ATTEMPT FAILED\n"
+                f"Error: {previous_error}\n"
+                f"Correct your output accordingly."
+            )
+
+        start_ms = time.perf_counter()
+
+        try:
+            raw_output = await self._client.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                max_tokens=node.focus_prompt.max_tokens,
+                json_mode=True,
+            )
+        except OllamaConnectionError:
+            raise
+        except Exception as exc:
+            _log.error("node_execution_error", node_id=node.node_id, error=str(exc))
+            raise NodeExecutionError(
+                node_id=node.node_id,
+                attempt_count=attempt_number,
+                last_output="",
+                context={"error": str(exc)},
+            ) from exc
+
+        elapsed_ms = (time.perf_counter() - start_ms) * 1000
+
+        _log.info(
+            "node_executed",
+            node_id=node.node_id,
+            attempt_number=attempt_number,
+            execution_time_ms=round(elapsed_ms, 2),
+        )
+
+        return raw_output, rule_files
+
+
+# ─── Factory ───────────────────────────────────────────────────────────────────
+
+
+def create_ollama_client(config: SpecForgeConfig) -> OllamaClient:
+    """Create an OllamaClient from application configuration.
+
+    Args:
+        config: SpecForgeConfig instance (from get_config()).
+
+    Returns:
+        A configured OllamaClient bound to the configured base URL and model.
+    """
+    return OllamaClient(
+        base_url=str(config.ollama_base_url),
+        model=config.ollama_model,
+        temperature=config.ollama_temperature,
+    )

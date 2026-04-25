@@ -1,0 +1,217 @@
+{
+  "version": "1.0.0",
+  "name": "Bug Report Cognitive Template",
+  "description": "Generates structured bug reports from raw error descriptions using a 6-node adversarial reasoning pipeline",
+  "nodes": [
+    {
+      "node_id": "metadata_extraction",
+      "name": "Metadata Extraction",
+      "description": "Extracts identifying metadata from raw bug report: title, component, reporter, date",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a meticulous bug report analyst. Your specialty is extracting precise metadata from raw error descriptions. You always output valid JSON matching the required schema. Never guess — if information is not present, use 'unknown'. Dates must be ISO 8601 format.",
+        "user_template": "Extract metadata from this bug report:\n\n{raw_error_description}\n\nOutput JSON with exactly these fields: title (short description, max 100 chars), component (affected module/service), reporter (name or username), date (ISO 8601 or 'unknown').",
+        "output_schema": {
+          "type": "object",
+          "required": ["title", "component", "reported_by", "date"],
+          "properties": {
+            "title": {"type": "string", "maxLength": 100},
+            "component": {"type": "string"},
+            "reported_by": {"type": "string"},
+            "date": {"type": "string"}
+          }
+        },
+        "required_variables": ["raw_error_description"],
+        "max_tokens": 512,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": ["python_rules"],
+        "follow_links": true,
+        "max_depth": 1,
+        "token_budget": 800
+      },
+      "depends_on": [],
+      "can_run_parallel": true,
+      "max_retries": 3,
+      "output_key": "metadata"
+    },
+    {
+      "node_id": "severity_classification",
+      "name": "Severity Classification",
+      "description": "Classifies bug severity (critical/high/medium/low) and assigns priority (P0-P3) based on impact analysis",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a senior reliability engineer specializing in severity triage. You classify bugs with surgical precision using the severity_classification rules. SEV1=critical (data loss/security/system failure), SEV2=high (regression/significant degraded perf), SEV3=medium (UI glitch/non-blocking), SEV4=low (warning/advisory). Priority: P0=immediate, P1=24h, P2=1 week, P3=backlog. Always explain your reasoning in one sentence.",
+        "user_template": "Classify severity and priority for this bug:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\nReporter: {metadata.reported_by}\nDate: {metadata.date}\n\nOutput JSON: {severity: enum(critical|high|medium|low), priority: enum(P0|P1|P2|P3), reasoning: string (one sentence)}",
+        "output_schema": {
+          "type": "object",
+          "required": ["severity", "priority", "reasoning"],
+          "properties": {
+            "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+            "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+            "reasoning": {"type": "string"}
+          }
+        },
+        "required_variables": ["metadata"],
+        "max_tokens": 384,
+        "temperature": 0.2
+      },
+      "bento_config": {
+        "rule_files": ["severity_classification"],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1200
+      },
+      "depends_on": ["metadata_extraction"],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "output_key": "severity"
+    },
+    {
+      "node_id": "reproduction_steps",
+      "name": "Reproduction Steps Generator",
+      "description": "Generates numbered, precise reproduction steps using adversarial triad (Creator+Cynic+Resolver) for maximum coverage",
+      "node_type": "adversarial",
+      "focus_prompt": {
+        "system_prompt": "You are an adversarial QA engineer. You generate bulletproof reproduction steps by playing Creator (invents the scenario), Cynic (pokes holes — what could go wrong?), and Resolver (how would a developer actually fix this?). Each step must have: step_number (int), action (exact user action), expected (what should happen), actual (what actually happens). Steps must be specific enough for any engineer to reproduce without prior context. Minimum 3 steps, maximum 10.",
+        "user_template": "Generate reproduction steps for this bug:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\n\nRaw description:\n{raw_error_description}\n\nOutput JSON: {steps: [{step_number: int, action: string, expected: string, actual: string}]}",
+        "output_schema": {
+          "type": "object",
+          "required": ["steps"],
+          "properties": {
+            "steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["step_number", "action", "expected", "actual"],
+                "properties": {
+                  "step_number": {"type": "integer", "minimum": 1},
+                  "action": {"type": "string"},
+                  "expected": {"type": "string"},
+                  "actual": {"type": "string"}
+                }
+              },
+              "minItems": 3,
+              "maxItems": 10
+            }
+          }
+        },
+        "required_variables": ["metadata", "raw_error_description"],
+        "max_tokens": 1024,
+        "temperature": 0.4
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": false,
+        "max_depth": 0,
+        "token_budget": 600
+      },
+      "depends_on": ["metadata_extraction"],
+      "can_run_parallel": false,
+      "max_retries": 3,
+      "output_key": "repro_steps"
+    },
+    {
+      "node_id": "root_cause_analysis",
+      "name": "Root Cause Analysis",
+      "description": "Generates 3 hypotheses for root cause, evaluates evidence, selects most likely cause with confidence level",
+      "node_type": "lookahead",
+      "focus_prompt": {
+        "system_prompt": "You are a systems diagnostician. You analyze reproduction steps and generate exactly 3 hypotheses for the root cause, then select the most likely one. Each hypothesis must be specific (not 'a bug' but 'null pointer in X due to Y'). Confidence levels: high (>80%), medium (50-80%), low (<50%). Evidence must cite specific steps. affected_code_paths must be concrete file/module paths if known, or 'unknown'.",
+        "user_template": "Analyze root cause for this bug:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\n\nReproduction steps:\n{repro_steps.steps}\n\nGenerate 3 hypotheses, pick best one. Output JSON: {likely_cause: string, confidence: enum(high|medium|low), evidence: string (citing step numbers), affected_code_paths: array[string] (file paths or 'unknown')}",
+        "output_schema": {
+          "type": "object",
+          "required": ["likely_cause", "confidence", "evidence", "affected_code_paths"],
+          "properties": {
+            "likely_cause": {"type": "string"},
+            "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+            "evidence": {"type": "string"},
+            "affected_code_paths": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "required_variables": ["metadata", "repro_steps"],
+        "max_tokens": 768,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": ["python_rules", "error_handling_guidelines"],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1400
+      },
+      "depends_on": ["reproduction_steps"],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "output_key": "root_cause"
+    },
+    {
+      "node_id": "impact_assessment",
+      "name": "Impact Assessment",
+      "description": "Computes affected user count and business impact using python_eval symbolic tool, determines SLA breach risk",
+      "node_type": "symbolic",
+      "symbolic_tool": "python_eval",
+      "focus_prompt": {
+        "system_prompt": "You are a business impact analyst. You compute affected_users_estimate using python_eval tool with this formula: users_affected = total_users * (component_adoption_rate) * (failure_rate_per_request). component_adoption_rate defaults to 0.3 if unknown. failure_rate_per_request defaults to 0.01 if unknown. SLA_breach is true if severity is critical AND estimated users > 1000. Business impact must describe revenue/data/reputation risk in one sentence.",
+        "user_template": "Assess business impact:\n\nSeverity: {severity.severity}\nPriority: {severity.priority}\nComponent: {metadata.component}\n\nCompute affected_users_estimate using python_eval. Output JSON: {affected_users_estimate: number, business_impact: string, sla_breach: bool}",
+        "output_schema": {
+          "type": "object",
+          "required": ["affected_users_estimate", "business_impact", "sla_breach"],
+          "properties": {
+            "affected_users_estimate": {"type": "number"},
+            "business_impact": {"type": "string"},
+            "sla_breach": {"type": "boolean"}
+          }
+        },
+        "required_variables": ["severity", "metadata"],
+        "max_tokens": 512,
+        "temperature": 0.2
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": false,
+        "max_depth": 0,
+        "token_budget": 400
+      },
+      "depends_on": ["severity_classification"],
+      "can_run_parallel": false,
+      "max_retries": 1,
+      "output_key": "impact"
+    },
+    {
+      "node_id": "final_report_assembly",
+      "name": "Final Report Assembly",
+      "description": "Assembles complete markdown bug report from all node outputs with summary and action items",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a technical writer. You assemble complete, professional markdown bug reports. The report must include: Title, Severity/Priority badge, Metadata section, Reproduction Steps table, Root Cause section with confidence, Impact Assessment section, and Action Items as a numbered list. Summary must be 2 sentences max. Action items must be concrete, actionable, and owned by a role (e.g., 'Backend team: fix null check in X').",
+        "user_template": "Assemble the final bug report from all inputs.\n\nMetadata: {metadata}\nSeverity: {severity}\nReproduction Steps: {repro_steps}\nRoot Cause: {root_cause}\nImpact: {impact}\n\nOutput JSON: {report_markdown: string (full markdown), summary: string (2 sentences max), action_items: array[string] (role-prefixed concrete tasks)}",
+        "output_schema": {
+          "type": "object",
+          "required": ["report_markdown", "summary", "action_items"],
+          "properties": {
+            "report_markdown": {"type": "string"},
+            "summary": {"type": "string", "maxLength": 500},
+            "action_items": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "required_variables": ["metadata", "severity", "repro_steps", "root_cause", "impact"],
+        "max_tokens": 2048,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": false,
+        "max_depth": 0,
+        "token_budget": 800
+      },
+      "depends_on": ["metadata_extraction", "severity_classification", "reproduction_steps", "root_cause_analysis", "impact_assessment"],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "output_key": "final_report"
+    }
+  ],
+  "schema_version": "1.0.0",
+  "tags": ["bug-report", "quality", "adversarial", "sre"],
+  "author": "specforge"
+}

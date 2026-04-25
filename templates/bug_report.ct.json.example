@@ -1,0 +1,49 @@
+{
+  "$schema": "https://specforge.io/schema/cognitive-template.json",
+  "version": "1.0.0",
+  "name": "Bug Report Analysis",
+  "description": "Analyzes bug reports and generates fix plans",
+  "nodes": [
+    {
+      "id": "parse",
+      "type": "atomic",
+      "model": "llama3.2",
+      "prompt": "Parse the bug report into structured fields: title, severity, repro_steps, expected vs actual behavior.",
+      "tools": []
+    },
+    {
+      "id": "classify",
+      "type": "atomic",
+      "model": "llama3.2",
+      "prompt": "Classify severity: SEV1 (data loss/critical), SEV2 (regression), SEV3 (minor).",
+      "tools": [],
+      "depends_on": ["parse"]
+    },
+    {
+      "id": "root_cause",
+      "type": "atomic",
+      "model": "llama3.1:8b",
+      "prompt": "Analyze repro_steps and identify root cause. Output a root_cause field.",
+      "tools": [],
+      "depends_on": ["parse"]
+    },
+    {
+      "id": "plan",
+      "type": "atomic",
+      "model": "llama3.1:8b",
+      "prompt": "Generate a fix plan as a numbered list of steps. Include code snippet if applicable.",
+      "tools": [],
+      "depends_on": ["root_cause"]
+    }
+  ],
+  "output_schema": {
+    "type": "object",
+    "required": ["title", "severity", "root_cause", "fix_plan"],
+    "properties": {
+      "title": {"type": "string"},
+      "severity": {"type": "string", "enum": ["SEV1", "SEV2", "SEV3"]},
+      "root_cause": {"type": "string"},
+      "fix_plan": {"type": "array", "items": {"type": "string"}}
+    }
+  }
+}
