@@ -133,11 +133,19 @@ class LookaheadDAG:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         hypotheses: list[HypothesisPath] = []
+        first_exc: Exception | None = None
         for result in results:
             if isinstance(result, Exception):
+                if first_exc is None:
+                    first_exc = result
                 _log.error("lookahead_path_error", error=str(result))
                 continue
             hypotheses.append(result)
+
+        # All paths failed — re-raise the original exception so the caller
+        # sees the real error instead of an empty hypotheses list
+        if len(hypotheses) == 0 and first_exc is not None:
+            raise first_exc
 
         _log.info(
             "lookahead_hypotheses_generated",

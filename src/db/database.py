@@ -41,6 +41,11 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
+def async_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Backward-compatible alias for the async session factory."""
+    return get_session_factory()
+
+
 async def get_db() -> AsyncSession:
     """Per-request async session (for FastAPI Depends)."""
     factory = get_session_factory()

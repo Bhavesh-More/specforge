@@ -29,6 +29,7 @@ class SpecForgeConfig(BaseSettings):
 
     database_url: PostgresDsn
     redis_url: RedisDsn
+    api_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434")
     ollama_model: str = "llama3.2"
     ollama_teacher_model: str = "llama3.1:8b"

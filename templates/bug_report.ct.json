@@ -10,7 +10,7 @@
       "node_type": "standard",
       "focus_prompt": {
         "system_prompt": "You are a meticulous bug report analyst. Your specialty is extracting precise metadata from raw error descriptions. You always output valid JSON matching the required schema. Never guess — if information is not present, use 'unknown'. Dates must be ISO 8601 format.",
-        "user_template": "Extract metadata from this bug report:\n\n{raw_error_description}\n\nOutput JSON with exactly these fields: title (short description, max 100 chars), component (affected module/service), reporter (name or username), date (ISO 8601 or 'unknown').",
+        "user_template": "Extract metadata from this bug report:\n\n{description}\n\nOutput JSON with exactly these fields: title (short description, max 100 chars), component (affected module/service), reporter (name or username), date (ISO 8601 or 'unknown').",
         "output_schema": {
           "type": "object",
           "required": ["title", "component", "reported_by", "date"],
@@ -21,7 +21,7 @@
             "date": {"type": "string"}
           }
         },
-        "required_variables": ["raw_error_description"],
+        "required_variables": ["description"],
         "max_tokens": 512,
         "temperature": 0.3
       },
@@ -75,7 +75,7 @@
       "node_type": "adversarial",
       "focus_prompt": {
         "system_prompt": "You are an adversarial QA engineer. You generate bulletproof reproduction steps by playing Creator (invents the scenario), Cynic (pokes holes — what could go wrong?), and Resolver (how would a developer actually fix this?). Each step must have: step_number (int), action (exact user action), expected (what should happen), actual (what actually happens). Steps must be specific enough for any engineer to reproduce without prior context. Minimum 3 steps, maximum 10.",
-        "user_template": "Generate reproduction steps for this bug:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\n\nRaw description:\n{raw_error_description}\n\nOutput JSON: {steps: [{step_number: int, action: string, expected: string, actual: string}]}",
+        "user_template": "Generate reproduction steps for this bug:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\n\nRaw description:\n{description}\n\nOutput JSON: {steps: [{step_number: int, action: string, expected: string, actual: string}]}",
         "output_schema": {
           "type": "object",
           "required": ["steps"],
@@ -97,12 +97,12 @@
             }
           }
         },
-        "required_variables": ["metadata", "raw_error_description"],
+        "required_variables": ["metadata", "description"],
         "max_tokens": 1024,
         "temperature": 0.4
       },
       "bento_config": {
-        "rule_files": [],
+        "rule_files": ["error_handling_guidelines"],
         "follow_links": false,
         "max_depth": 0,
         "token_budget": 600

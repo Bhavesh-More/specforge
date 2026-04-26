@@ -78,10 +78,8 @@ async def get_mcp_client(
 # ─── Execution engine components ────────────────────────────────────────────────
 
 
-async def get_context_surgeon(
-    knowledge_manager: KnowledgeGraphManager = Depends(),
-) -> ContextSurgeon:
-    """Return a ContextSurgeon for a given rules directory."""
+async def get_context_surgeon() -> ContextSurgeon:
+    """Return a ContextSurgeon for the rules directory."""
     return ContextSurgeon(rules_dir=Path("rules"))
 
 

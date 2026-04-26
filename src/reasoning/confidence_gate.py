@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.core.logging import get_logger
+from src.core.exceptions import NodeExecutionError
 from src.executor.result_weaver import ResultWeaver, StateFileWriter
 from src.compiler.template_registry import TemplateRegistry
 from src.knowledge.graph_manager import KnowledgeGraphManager
@@ -280,12 +281,28 @@ class SpecForgeEngine:
                 node = self._find_node(template, node_id)
 
                 if isinstance(result, Exception):
+                    error_message = str(result)
+                    attempt_count = 0
+                    if isinstance(result, NodeExecutionError):
+                        attempt_count = result.attempt_count
+                        missing_var = result.context.get("missing_variable")
+                        missing_tpl_var = result.context.get("missing_template_variable")
+                        if missing_var:
+                            error_message = (
+                                f"{error_message}. Missing required input variable: '{missing_var}'"
+                            )
+                        elif missing_tpl_var:
+                            error_message = (
+                                f"{error_message}. Missing template variable: '{missing_tpl_var}'"
+                            )
+
                     result = NodeResult(
                         node_id=node_id,
                         status=NodeStatus.FAILED,
                         tier_used=ExecutionTier.FAST,
                         raw_output="",
-                        error_message=str(result),
+                        attempt_count=attempt_count,
+                        error_message=error_message,
                     )
 
                 # Check for human edits before propagating output
@@ -306,7 +323,12 @@ class SpecForgeEngine:
                         node_id=node_id,
                     )
                     execution_run.status = ExecutionStatus.FAILED
-                    execution_run.error_message = f"Critical path node '{node_id}' failed"
+                    node_error = result.error_message
+                    execution_run.error_message = (
+                        f"Critical path node '{node_id}' failed: {node_error}"
+                        if node_error
+                        else f"Critical path node '{node_id}' failed"
+                    )
                     execution_run.completed_at = datetime.now(timezone.utc)
                     execution_run.total_execution_time_ms = (time.perf_counter() - start_ms) * 1000
                     await self._state.finalize(execution_run, success=False)

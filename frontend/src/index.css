@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sf-bg-deep: #0f0f0f;
+  --color-sf-bg: #171717;
+  --color-sf-surface: #1c1c1c;
+  --color-sf-green: #3ecf8e;
+  --color-sf-green-link: #00c573;
+  --color-sf-text: #fafafa;
+  --color-sf-text-secondary: #b4b4b4;
+  --color-sf-text-muted: #898989;
+  --color-sf-border: #242424;
+  --color-sf-border-standard: #2e2e2e;
+  --color-sf-border-strong: #363636;
+  --color-sf-amber: #f59e0b;
+  --color-sf-blue: #3b82f6;
+  --color-sf-red: #ef4444;
+  --color-sf-purple: #a855f7;
+  --color-sf-gray: #6b7280;
+
+  --font-family-sans: "Inter", system-ui, sans-serif;
+  --font-family-mono: "JetBrains Mono", "Fira Code", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #171717;
+  color: #b4b4b4;
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e2e2e;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #363636;
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: 1px solid rgba(62, 207, 142, 0.5);
+  outline-offset: 1px;
+}
+
+/* Animations */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes slide-in-right {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 200ms ease-out forwards;
+}
+
+/* Spinner for loading */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* Skeleton shimmer */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-pulse {
+  background: linear-gradient(90deg, #1c1c1c 25%, #2e2e2e 50%, #1c1c1c 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}

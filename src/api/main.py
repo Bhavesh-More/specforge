@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize database (async engine)
     try:
         from src.db.database import init_db
-        await init_db(str(cfg.database_url))
+        await init_db()
         app.state.db_available = True
         _log.info("db_initialized")
     except Exception as e:
@@ -120,3 +120,6 @@ def create_app() -> FastAPI:
     app.include_router(healing.router, prefix="/api/v1", tags=["healing"])
 
     return app
+
+
+app = create_app

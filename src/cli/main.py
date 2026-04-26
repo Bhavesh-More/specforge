@@ -2,14 +2,31 @@
 
 import asyncio
 import json
+import logging
+import sys
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import click
+import httpx
 import typer
+from typer.core import TyperGroup
 from rich.console import Console
 from rich.table import Table
 from rich import print as rprint
+
+# Suppress noisy third-party loggers at module load time
+for _logger_name in ("httpx", "httpcore", "charset_normalizer", "certifi"):
+    _l = logging.getLogger(_logger_name)
+    _l.setLevel(logging.WARNING)
+    _l.propagate = False
+
+# CLI invocations: root logger at WARNING so only WARNING+ prints to terminal.
+# This prevents httpx/httpcore INFO lines from leaking between rich output.
+logging.getLogger().setLevel(logging.WARNING)
 
 app = typer.Typer(
     name="specforge",
@@ -65,7 +82,7 @@ def _load_template(template_ref: str) -> "CognitiveTemplate":
 
 
 def _get_redis() -> "RedisClient":
-    from src.cache.redis_client import RedisClient 
+    from src.cache.redis_client import RedisClient
     from src.core.config import get_config
 
     cfg = get_config()
@@ -149,7 +166,20 @@ def template_waves(template_id: str):
 # ─── Run group ──────────────────────────────────────────────────────────────────
 
 
-run_app = typer.Typer(help="Execute templates and manage runs")
+class _RunGroup(TyperGroup):
+    """Backward-compatible run group.
+
+    Rewrites legacy syntax `specforge run <template_id> ...` to
+    `specforge run start <template_id> ...`.
+    """
+
+    def resolve_command(self, ctx: click.Context, args: list[str]):
+        if args and args[0] not in self.commands and not args[0].startswith("-"):
+            args.insert(0, "start")
+        return super().resolve_command(ctx, args)
+
+
+run_app = typer.Typer(help="Execute templates and manage runs", cls=_RunGroup)
 app.add_typer(run_app, name="run")
 
 
@@ -262,8 +292,6 @@ def run_start(
     sync: bool = typer.Option(False, "--sync", "-s"),
 ):
     """Start a template execution."""
-    import uuid
-
     from src.tasks.execution_tasks import run_template_execution
 
     input_data = {}
@@ -271,10 +299,9 @@ def run_start(
         input_data = _load_json_file(input_file)
 
     run_id = str(uuid.uuid4())
-    typer.secho(f"Starting execution: run_id={run_id}", fg=typer.colors.CYAN)
 
     if sync:
-        typer.secho("SYNC mode not yet implemented — use run status to monitor", fg=typer.colors.YELLOW)
+        _run_sync_execution(run_id, template_id, input_data, output_dir)
     else:
         run_template_execution.delay(
             run_id=run_id,
@@ -282,10 +309,210 @@ def run_start(
             input_data=input_data,
             output_dir=str(output_dir),
         )
-        typer.secho(f"Execution started asynchronously. Monitor with: specforge run status {run_id}", fg=typer.colors.GREEN)
+        console.print("[dim]Execution submitted.[/dim]")
+        console.print(f"[dim]Run ID   : {run_id}[/dim]")
+        console.print(f"[dim]Monitor  : specforge run status {run_id}[/dim]")
+        console.print(f"[dim]State    : specforge run state {run_id}[/dim]")
 
 
-# ─── Knowledge group ──────────────────────────────────────────────────────────────
+def _run_sync_execution(run_id: str, template_id: str, input_data: dict, output_dir: Path) -> None:
+    """Execute a template synchronously, polling the API every 2 seconds.
+
+    Prints node results as they complete, then prints a final summary.
+    Exits with code 1 if the execution fails.
+    """
+    from src.core.config import get_config
+
+    cfg = get_config()
+    base_url = str(cfg.api_base_url).rstrip("/")
+
+    # ── Submit execution ──────────────────────────────────────────────────────────
+    console.print("[dim]Starting execution...[/dim]")
+    console.print(f"[dim]Template : {template_id}[/dim]")
+    console.print(f"[dim]Output   : {output_dir}[/dim]")
+    console.print(f"{'─' * 50}")
+
+    async def _submit() -> str:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{base_url}/api/v1/executions",
+                json={
+                    "template_id": template_id,
+                    "input_data": input_data,
+                    "output_dir": str(output_dir),
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            run_id_value = data.get("run_id") or data.get("runId")
+            if not run_id_value:
+                raise KeyError("run_id")
+            return run_id_value
+
+    try:
+        submitted_run_id = _run_async(_submit())
+    except Exception as exc:
+        console.print(f"[red]Failed to submit execution: {exc}[/red]")
+        raise typer.Exit(1)
+
+    output_path = output_dir / submitted_run_id
+    console.print(f"[dim]Run ID   : {submitted_run_id}[/dim]")
+
+    # ── Poll loop ───────────────────────────────────────────────────────────────
+    from rich.live import Live
+    from rich.text import Text
+
+    displayed_nodes: set[str] = set()
+    total_nodes = 0
+    completed_nodes = 0
+    POLL_INTERVAL = 2.0
+    MAX_RETRIES = 3
+    SEP = f"{'─' * 50}"
+
+    def _status_icon(status: str) -> str:
+        # Handle both snake_case (engine internals) and camelCase (API responses)
+        s = status.lower()
+        if s == "failed":
+            return "[red]✕[/red]"
+        if s == "pending":
+            return "[dim]○[/dim]"
+        if s == "running":
+            return "[cyan]⟳[/cyan]"
+        if s in ("passed_tier1", "passedTier1"):
+            return "[green]✓[/green]"
+        if s in ("passed_tier2", "passedTier2"):
+            return "[yellow]⚠[/yellow]"
+        if s in ("passed_tier3", "passedTier3"):
+            return "[blue]◈[/blue]"
+        return "[dim]○[/dim]"
+
+    def _tier_label(tier: str, node_type: str | None = None) -> str:
+        label = {"fast": "FAST", "repair": "REPAIR", "deep": "DEEP"}.get(
+            tier.lower(), tier.upper()
+        )
+        if node_type:
+            upper = node_type.upper()
+            if upper == "SYMBOLIC":
+                label += " [SYMBOLIC]"
+            elif upper == "ADVERSARIAL":
+                label += " [TRIAD]"
+            elif upper == "LOOKAHEAD":
+                label += " [LOOKAHEAD]"
+        return label
+
+    def _format_time(exec_time: float, node_type: str | None = None) -> str:
+        """Format execution time for display.
+
+        Non-SYMBOLIC nodes with < 1ms display as '—' (indicates missing/bad data).
+        >= 1000ms displayed as seconds.
+        """
+        is_symbolic = node_type and node_type.upper() == "SYMBOLIC"
+        if exec_time < 1.0 and not is_symbolic:
+            return "—"
+        if exec_time >= 1000.0:
+            return f"{exec_time / 1000.0:.1f}s"
+        return f"{exec_time:.0f}ms"
+
+    def _print_node(node_id: str, node_data: dict) -> None:
+        status = node_data.get("status", "pending")
+        # API uses camelCase: tierUsed, executionTimeMs, attemptCount, nodeType
+        # Also support snake_case from engine-internal dicts
+        tier = node_data.get("tierUsed") or node_data.get("tier_used", "fast")
+        exec_time = node_data.get("executionTimeMs") or node_data.get("execution_time_ms", 0.0)
+        attempts = node_data.get("attemptCount") or node_data.get("attempt_count", 1)
+        node_type = node_data.get("nodeType") or node_data.get("node_type")
+
+        # 0 = pre-execution failure (e.g. missing variable resolution)
+        attempts_str = "—" if attempts <= 0 else str(attempts)
+
+        icon = _status_icon(status)
+        tier_lbl = _tier_label(tier, node_type)
+        time_str = _format_time(exec_time, node_type)
+        suffix = ""
+        if node_type:
+            upper = node_type.upper()
+            if upper == "SYMBOLIC":
+                suffix = "  [SYMBOLIC]"
+            elif upper == "ADVERSARIAL":
+                suffix = "  [TRIAD]"
+            elif upper == "LOOKAHEAD":
+                suffix = "  [LOOKAHEAD]"
+
+        console.print(f"{icon}  {node_id:<24} {tier_lbl:<12} {time_str:<8} attempt {attempts_str}{suffix}")
+
+    def _is_done(node_data: dict) -> bool:
+        s = (node_data.get("status") or "pending").lower()
+        return s not in ("pending", "running")
+
+    async def _poll_once() -> dict:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{base_url}/api/v1/executions/{submitted_run_id}")
+            resp.raise_for_status()
+            return resp.json()
+
+    async def _poll_loop() -> None:
+        nonlocal displayed_nodes, total_nodes, completed_nodes
+
+        retry_count = 0
+
+        while True:
+            try:
+                data = _run_async(_poll_once())
+                retry_count = 0
+            except Exception as exc:
+                retry_count += 1
+                if retry_count > MAX_RETRIES:
+                    console.print(f"[red]API unreachable after {MAX_RETRIES} retries. Aborting.[/red]")
+                    raise typer.Exit(1)
+                console.print(f"[yellow]API error (retry {retry_count}/{MAX_RETRIES}): {exc}[/yellow]")
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+
+            # API top-level keys are camelCase; per-node keys are snake_case
+            status = data.get("status", "running")
+            node_results = data.get("nodeResults") or data.get("node_results", {})
+            total_nodes = data.get("totalNodes", data.get("total_nodes", len(node_results)))
+            completed_nodes = sum(1 for v in node_results.values() if _is_done(v))
+
+            # Print newly-completed nodes (each node printed only once)
+            for node_id, node_data in node_results.items():
+                if node_id not in displayed_nodes and _is_done(node_data):
+                    displayed_nodes.add(node_id)
+                    _print_node(node_id, node_data)
+
+            if status in {"pending", "running"}:
+                wave_desc = f"{completed_nodes}/{total_nodes} nodes complete"
+                console.print(f"  [dim]{wave_desc}...[/dim]", end="\r")
+                await asyncio.sleep(POLL_INTERVAL)
+                # Overwrite the line with spaces before next output
+                console.print(" " * 60, end="\r")
+                continue
+
+            # COMPLETED or FAILED
+            console.print("\n" + SEP)
+            duration = data.get("totalExecutionTimeMs") or data.get("total_execution_time_ms")
+            duration_str = f"{duration / 1000:.1f}s" if duration else "—"
+            state_path = data.get("stateFilePath") or data.get("state_file_path") or ""
+            error_msg = data.get("errorMessage") or data.get("error_message")
+
+            console.print(f"[dim]Status    : {status.upper()}[/dim]")
+            console.print(f"[dim]Duration  : {duration_str}[/dim]")
+            console.print(f"[dim]Nodes     : {completed_nodes}/{total_nodes}[/dim]")
+            if state_path:
+                console.print(f"[dim]Output    : {output_path / 'final_output.json'}[/dim]")
+                console.print(f"[dim]State     : {state_path}[/dim]")
+            console.print(SEP)
+
+            if error_msg and status == "failed":
+                console.print(f"[red]Error: {error_msg}[/red]")
+                raise typer.Exit(1)
+
+            return
+
+    _run_async(_poll_loop())
+
+
+# ─── Knowledge group ─────────────────────────────────────────────────────────────
 
 
 knowledge_app = typer.Typer(help="Manage rule files and the knowledge graph")
@@ -301,7 +528,6 @@ def knowledge_list():
 
     async def _list() -> None:
         await kg.initialize()
-        stats = await kg.get_graph_stats()
         all_files = kg._indexer.get_all_files()
 
         table = Table(title="Rule Files")
@@ -382,7 +608,7 @@ def knowledge_rebuild():
     typer.secho("Knowledge graph index rebuilt", fg=typer.colors.GREEN)
 
 
-# ─── Heal group ────────────────────────────────────────────────────────────────
+# ─── Heal group ───────────────────────────────────────────────────────────────
 
 
 heal_app = typer.Typer(help="View and manage self-healing events")
@@ -495,8 +721,6 @@ def doctor():
 
     cfg = get_config()
 
-    checks = []
-
     # Ollama
     async def check_ollama() -> tuple[str, bool]:
         client = create_ollama_client(cfg)
@@ -543,7 +767,7 @@ def doctor():
     console.print(table)
 
 
-from src.cache.redis_client import RedisClient 
+from src.cache.redis_client import RedisClient
 from src.compiler.dag_builder import DAGBuilder
 from src.core.exceptions import TemplateNotFoundError
 from src.models.cognitive_template import CognitiveTemplate

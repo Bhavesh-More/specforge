@@ -80,7 +80,9 @@ class NodeResult(BaseModel):
     tier_used: ExecutionTier
     raw_output: str = ""
     parsed_output: dict[str, Any] | None = None
-    validation_result: ValidationResult = Field(default_factory=ValidationResult)
+    validation_result: ValidationResult = Field(
+        default_factory=lambda: ValidationResult(is_valid=False)
+    )
     attempt_count: int = 0
     execution_time_ms: float = 0.0
     rule_files_used: list[str] = Field(default_factory=list)

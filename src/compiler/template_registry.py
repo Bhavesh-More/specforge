@@ -67,6 +67,8 @@ class TemplateRegistry:
 
         _log.debug("template_cache_miss", key=template_id_or_name)
 
+        requested_key = template_id_or_name.strip()
+
         # Scan directory for matching file
         found_path: Path | None = None
         for entry in self._iter_ct_files():
@@ -80,7 +82,13 @@ class TemplateRegistry:
                 except json.JSONDecodeError:
                     continue
 
-                if tid == template_id_or_name or tname.lower() == template_id_or_name.lower():
+                file_key = entry.name[:-8]  # strip trailing ".ct.json"
+
+                if (
+                    tid == requested_key
+                    or tname.lower() == requested_key.lower()
+                    or file_key.lower() == requested_key.lower()
+                ):
                     found_path = entry
                     break
 
@@ -224,5 +232,5 @@ class TemplateRegistry:
         self._templates_dir.mkdir(parents=True, exist_ok=True)
 
         for entry in self._templates_dir.iterdir():
-            if entry.is_file() and re.match(r"^[a-f0-9-]+\.ct\.json$", entry.name):
+            if entry.is_file() and entry.name.endswith(".ct.json"):
                 yield entry

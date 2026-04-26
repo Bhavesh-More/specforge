@@ -1,5 +1,6 @@
 """Bento Box micro-context assembly — the per-node context firewall."""
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -8,7 +9,7 @@ import aiofiles
 
 from src.core.exceptions import NodeExecutionError
 from src.core.logging import get_logger
-from src.models.cognitive_template import BentoBoxConfig, DAGNode
+from src.models.cognitive_template import DAGNode
 
 _log = get_logger(__name__)
 
@@ -137,7 +138,7 @@ class ContextSurgeon:
         Returns:
             A Bento Box context dict with keys:
             - rule_content (str): assembled rule markdown
-            - variables (dict): merged variable dict for interpolation
+            - variables (dict): merged and flattened variable dict for interpolation
             - rule_files_used (list[str]): names of loaded rule files
             - token_estimate (int): estimated total token count
             - truncated (bool): True if token budget was exceeded
@@ -152,7 +153,6 @@ class ContextSurgeon:
         rule_files_used: list[str] = []
         all_rule_content: list[str] = []
         total_tokens = 0
-        truncated = False
 
         for file_name in bento.rule_files:
             content = await self.load_rule_file(file_name)
@@ -173,7 +173,6 @@ class ContextSurgeon:
                     )
                     for linked_content in linked:
                         if total_tokens + estimate_tokens(linked_content) > token_budget:
-                            truncated = True
                             _log.warning(
                                 "bento_box_truncated",
                                 node_id=node.node_id,
@@ -184,7 +183,7 @@ class ContextSurgeon:
                         all_rule_content.append(linked_content)
                         total_tokens += estimate_tokens(linked_content)
 
-        # Enforce token budget — stop adding content once exceeded
+        # Enforce token budget across all accumulated content
         truncated_rule_content: list[str] = []
         running_tokens = 0
         truncated = False
@@ -206,22 +205,28 @@ class ContextSurgeon:
 
         rule_content = "\n\n".join(truncated_rule_content)
 
-        # Merge variables from global_state and input_data
-        all_variables: dict[str, Any] = {}
-        all_variables.update(input_data)
-        all_variables.update(global_state)
+        # Merge variables: input_data is the base, global_state takes precedence
+        combined: dict[str, Any] = {}
+        combined.update(input_data)
+        combined.update(global_state)
 
-        # Check required_variables
+        # Flatten into dot-notation keys for interpolation
+        flat = self._flatten_variables(combined)
+
+        # Check required_variables against the flat namespace so that
+        # references like "metadata.title" are validated here, not later
         for var in node.focus_prompt.required_variables:
-            if var not in all_variables:
+            if var not in flat:
                 raise NodeExecutionError(
                     node_id=node.node_id,
                     attempt_count=0,
                     last_output="",
-                    context={"missing_variable": var},
+                    context={
+                        "missing_variable": var,
+                        "available_keys": list(flat.keys()),
+                    },
                 )
 
-        # Log assembly summary
         _log.info(
             "bento_box_assembled",
             node_id=node.node_id,
@@ -232,11 +237,46 @@ class ContextSurgeon:
 
         return {
             "rule_content": rule_content,
-            "variables": all_variables,
+            "variables": flat,
             "rule_files_used": rule_files_used,
             "token_estimate": running_tokens,
             "truncated": truncated,
         }
+
+    # ─── Variable flattening ───────────────────────────────────────────────────
+
+    def _flatten_variables(
+        self, variables: dict[str, Any], prefix: str = ""
+    ) -> dict[str, Any]:
+        """Recursively flatten nested dicts into dot-notation keys.
+
+        Example::
+
+            {"metadata": {"title": "Bug", "component": "auth"}}
+            →
+            {
+                "metadata":           {"title": "Bug", "component": "auth"},
+                "metadata.title":     "Bug",
+                "metadata.component": "auth",
+            }
+
+        Lists are kept as-is at their own key; they are serialised to JSON
+        when substituted into a template.
+
+        Args:
+            variables: Possibly nested dict to flatten.
+            prefix: Dot-separated key prefix accumulated during recursion.
+
+        Returns:
+            Flat dict with dot-notation keys at every nesting level.
+        """
+        flat: dict[str, Any] = {}
+        for key, value in variables.items():
+            full_key = f"{prefix}.{key}" if prefix else key
+            flat[full_key] = value
+            if isinstance(value, dict):
+                flat.update(self._flatten_variables(value, prefix=full_key))
+        return flat
 
     # ─── Prompt interpolation ──────────────────────────────────────────────────
 
@@ -244,32 +284,44 @@ class ContextSurgeon:
         self,
         template: str,
         variables: dict[str, Any],
+        node_id: str = "",
     ) -> str:
-        """Replace ``{variable_name}`` placeholders in a template string.
+        """Replace ``{variable}`` and ``{nested.key}`` patterns in a template.
+
+        Variables are expected to already be flattened (output of
+        ``_flatten_variables``). Nested values (dict / list) are serialised
+        to indented JSON before substitution.
 
         Args:
-            template: A template string with ``{key}`` placeholders.
-            variables: Dict mapping variable names to values.
+            template: String containing ``{key}`` placeholders.
+            variables: Flat dict produced by ``_flatten_variables``.
+            node_id: Node identifier used in error reporting.
 
         Returns:
-            The template with all placeholders replaced.
+            Fully interpolated string.
 
         Raises:
-            NodeExecutionError: If a placeholder key is missing from variables.
+            NodeExecutionError: If a placeholder key is not found in variables.
         """
-        def replacer(match: re.Match[str]) -> str:
+
+        def replacer(match: re.Match) -> str:  # type: ignore[type-arg]
             key = match.group(1)
             if key not in variables:
                 raise NodeExecutionError(
-                    node_id="",
+                    node_id=node_id,
                     attempt_count=0,
                     last_output="",
-                    context={"missing_template_variable": key},
+                    context={
+                        "missing_variable": key,
+                        "available_keys": list(variables.keys()),
+                    },
                 )
-            val = variables[key]
-            return str(val) if val is not None else ""
+            value = variables[key]
+            if isinstance(value, (dict, list)):
+                return json.dumps(value, indent=2)
+            return str(value)
 
-        return re.sub(r"\{([^}]+)\}", replacer, template)
+        return re.sub(r"\{([^{}]+)\}", replacer, template)
 
     # ─── Build final prompt ─────────────────────────────────────────────────────
 
@@ -293,13 +345,12 @@ class ContextSurgeon:
 
         system_prompt = node.focus_prompt.system_prompt
         if bento["rule_content"]:
-            system_prompt = (
-                f"{system_prompt}\n\n## Rules\n{bento['rule_content']}"
-            )
+            system_prompt = f"{system_prompt}\n\n## Rules\n{bento['rule_content']}"
 
         user_message = self.interpolate_prompt(
             node.focus_prompt.user_template,
             bento["variables"],
+            node_id=node.node_id,
         )
 
         return system_prompt, user_message, bento["rule_files_used"]

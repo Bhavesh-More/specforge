@@ -1,5 +1,6 @@
 """Executions router — start, monitor, and cancel execution runs."""
 
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, status
@@ -8,7 +9,7 @@ from fastapi.responses import FileResponse
 from src.api.dependencies import get_engine, get_redis
 from src.api.schemas.requests import StartExecutionRequest
 from src.api.schemas.responses import ExecutionDetail, ExecutionSummary, PaginatedListResponse
-from src.cache.redis_client import RedisClient 
+from src.cache.redis_client import RedisClient
 from src.core.exceptions import TemplateNotFoundError
 from src.core.logging import get_logger
 from src.models.execution import ExecutionStatus, ExecutionRun
@@ -33,8 +34,9 @@ async def start_execution(
     redis: RedisClient = Depends(get_redis),
 ) -> ExecutionSummary:
     """Start a new execution run (async, returns immediately with run_id)."""
+    import uuid
+
     from src.compiler.template_registry import TemplateRegistry
-    from pathlib import Path
 
     registry = TemplateRegistry(templates_dir=Path("templates"))
 
@@ -42,9 +44,6 @@ async def start_execution(
         template = await registry.load(req.template_id)
     except TemplateNotFoundError:
         raise HTTPException(status_code=404, detail="Template not found")
-
-    run_id = str(uuid.uuid4()) if True else req.input_data.get("run_id", str(uuid.uuid4()))
-    import uuid
 
     run_id = str(uuid.uuid4())
 
@@ -58,7 +57,6 @@ async def start_execution(
     )
 
     # Store initial run in Redis
-    import json
     await redis.set(_run_key(run_id), run.model_dump_json(), ex=86400)
     await redis.sadd(RUN_INDEX_KEY, run_id)
 
@@ -83,7 +81,6 @@ async def start_execution(
                 status=ExecutionStatus.FAILED,
                 error_message=str(exc),
             )
-        import json
         await redis.set(_run_key(run_id), result.model_dump_json(), ex=86400)
 
     background_tasks.add_task(_execute)
@@ -103,8 +100,6 @@ async def get_execution(
     redis: RedisClient = Depends(get_redis),
 ) -> ExecutionDetail:
     """Get execution status and results."""
-    import json
-
     raw = await redis.get(_run_key(run_id))
     if raw is None:
         raise HTTPException(status_code=404, detail="Execution run not found")
@@ -133,8 +128,6 @@ async def get_execution_state(
     redis: RedisClient = Depends(get_redis),
 ) -> FileResponse:
     """Return the current state.md content."""
-    import json
-
     raw = await redis.get(_run_key(run_id))
     if raw is None:
         raise HTTPException(status_code=404, detail="Execution run not found")
@@ -157,8 +150,6 @@ async def cancel_execution(
     redis: RedisClient = Depends(get_redis),
 ) -> None:
     """Cancel a running execution (marks as CANCELLED in Redis)."""
-    import json
-
     raw = await redis.get(_run_key(run_id))
     if raw is None:
         raise HTTPException(status_code=404, detail="Execution run not found")
@@ -173,8 +164,6 @@ async def list_executions(
     redis: RedisClient = Depends(get_redis),
 ) -> PaginatedListResponse:
     """List the 50 most recent execution runs."""
-    import json
-
     run_ids = await redis.smembers(RUN_INDEX_KEY)
     recent = sorted(run_ids, reverse=True)[:50]
 
