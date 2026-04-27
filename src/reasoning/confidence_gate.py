@@ -93,20 +93,50 @@ class ConfidenceGate:
             result = await self._triad.execute_triad(node, global_state, input_data)
             if result.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
                 self._tracker.record_success(template_id, node.node_id)
-            else:
-                await self._record_failure_and_trigger_healing(
-                    template_id, node, result, run_id,
+                _log.info(
+                    "confidence_gate_triad_passed",
+                    node_id=node.node_id,
+                    tier=result.tier_used.value,
                 )
+            else:
+                _log.warning(
+                    "confidence_gate_triad_failed_falling_back_to_retry",
+                    node_id=node.node_id,
+                    template_id=template_id,
+                )
+                fallback = await self._retry.execute_with_retry(node, global_state, input_data)
+                if fallback.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
+                    self._tracker.record_success(template_id, node.node_id)
+                    return fallback
+                await self._record_failure_and_trigger_healing(
+                    template_id, node, fallback, run_id,
+                )
+                return fallback
             return result
 
         if node.node_type == NodeType.LOOKAHEAD:
             result = await self._lookahead.execute_with_lookahead(node, global_state, input_data)
             if result.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
                 self._tracker.record_success(template_id, node.node_id)
-            else:
-                await self._record_failure_and_trigger_healing(
-                    template_id, node, result, run_id,
+                _log.info(
+                    "confidence_gate_lookahead_passed",
+                    node_id=node.node_id,
+                    tier=result.tier_used.value,
                 )
+            else:
+                _log.warning(
+                    "confidence_gate_lookahead_failed_falling_back_to_retry",
+                    node_id=node.node_id,
+                    template_id=template_id,
+                )
+                fallback = await self._retry.execute_with_retry(node, global_state, input_data)
+                if fallback.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
+                    self._tracker.record_success(template_id, node.node_id)
+                    return fallback
+                await self._record_failure_and_trigger_healing(
+                    template_id, node, fallback, run_id,
+                )
+                return fallback
             return result
 
         # ── STEP 2: Fast + Repair tiers (STANDARD / PARALLEL) ─────────────
@@ -245,6 +275,7 @@ class SpecForgeEngine:
         output_dir.mkdir(parents=True, exist_ok=True)
         state_path = output_dir / "state.md"
         self._state._path = state_path  # inject path into shared state writer
+        execution_run.state_file_path = str(state_path)
 
         await self._state.initialize(execution_run, template)
         await self._kg.initialize()
@@ -335,14 +366,18 @@ class SpecForgeEngine:
                     return execution_run
 
         # All waves complete
-        execution_run.status = ExecutionStatus.COMPLETED
+        any_failed = any(
+            result.status == NodeStatus.FAILED
+            for result in execution_run.node_results.values()
+        )
+        execution_run.status = ExecutionStatus.FAILED if any_failed else ExecutionStatus.COMPLETED
         execution_run.completed_at = datetime.now(timezone.utc)
         execution_run.total_execution_time_ms = (time.perf_counter() - start_ms) * 1000
         execution_run.final_output = self._weaver.assemble_final_output(
             global_state, template, execution_run,
         )
 
-        await self._state.finalize(execution_run, success=True)
+        await self._state.finalize(execution_run, success=not any_failed)
 
         _log.info(
             "execution_complete",

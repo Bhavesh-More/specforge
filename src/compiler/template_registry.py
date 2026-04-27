@@ -77,7 +77,7 @@ class TemplateRegistry:
                     raw = await fh.read()
                 try:
                     top = json.loads(raw)
-                    tid = top.get("template_id", "")
+                    tid = top.get("template_id", "") or entry.stem
                     tname = top.get("name", "")
                 except json.JSONDecodeError:
                     continue
@@ -101,8 +101,10 @@ class TemplateRegistry:
 
         # Load and validate
         template = CognitiveTemplate.load_from_file(found_path)
+        if not template.template_id:
+            template = template.model_copy(update={"template_id": found_path.stem})
         self._cache[template.template_id] = template
-        if template.name not in self._cache:
+        if template.name.lower() not in self._cache:
             self._cache[template.name.lower()] = template
 
         _log.info("template_loaded", template_id=template.template_id, name=template.name)
@@ -169,7 +171,7 @@ class TemplateRegistry:
             try:
                 top = json.loads(raw)
                 results.append({
-                    "template_id": top.get("template_id", ""),
+                    "template_id": top.get("template_id", "") or entry.stem,
                     "name": top.get("name", ""),
                     "version": top.get("version", ""),
                     "description": top.get("description", ""),

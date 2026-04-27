@@ -159,6 +159,7 @@ class AdversarialTriad:
                     update={
                         "system_prompt": cynic_system,
                         "user_template": cynic_user,
+                        "required_variables": [],
                     }
                 )
             }

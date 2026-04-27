@@ -7,3 +7,5 @@ uvicorn src.api.main:create_app --factory --reload --port 8000
 
 
 docker run -d -p 6380:6379 redis:7-alpine
+
+docker compose -f docker/docker-compose.yml up -d
