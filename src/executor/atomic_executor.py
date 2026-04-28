@@ -40,6 +40,7 @@ class OllamaClient:
         user_message: str,
         max_tokens: int = 512,
         json_mode: bool = True,
+        model: str | None = None,
     ) -> str:
         """Call Ollama ``/api/generate`` and return the text response.
 
@@ -56,7 +57,7 @@ class OllamaClient:
             OllamaConnectionError: If the request fails or times out.
         """
         payload: dict[str, object] = {
-            "model": self.model,
+            "model": model or self.model,
             "system": system_prompt,
             "prompt": user_message,
             "stream": False,
@@ -121,9 +122,38 @@ class OllamaClient:
         except (httpx.RequestError, httpx.TimeoutException):
             return False
 
+    async def list_local_models(self) -> list[dict[str, Any]]:
+        """Call ``GET /api/tags`` and return the list of locally available models.
+
+        Returns:
+            List of model dicts with keys: name, size, modified_at.
+        """
+        try:
+            response = await self._client.get(f"{self.base_url}/api/tags")
+            response.raise_for_status()
+            data = response.json()
+            return data.get("models", [])
+        except (httpx.RequestError, httpx.HTTPStatusError, httpx.TimeoutException):
+            return []
+
     async def close(self) -> None:
         """Close the underlying HTTP client."""
         await self._client.aclose()
+
+
+# ─── Model resolution ─────────────────────────────────────────────────────────
+
+
+async def _get_stored_ollama_models() -> tuple[str, str]:
+    """Return (main_model, teacher_model) from application config.
+
+    This is called at execution startup to resolve which Ollama models to use.
+    The caller unpacks as ``main_model, teacher_model = await _get_stored_ollama_models()``.
+    """
+    from src.core.config import get_config
+
+    cfg = get_config()
+    return cfg.ollama_model, cfg.ollama_teacher_model
 
 
 # ─── AtomicExecutor ────────────────────────────────────────────────────────────
@@ -152,6 +182,7 @@ class AtomicExecutor:
         input_data: dict[str, Any],
         attempt_number: int = 1,
         previous_error: str | None = None,
+        model: str | None = None,
     ) -> tuple[str, list[str]]:
         """Execute a single atomic node and return its raw output.
 
@@ -195,6 +226,7 @@ class AtomicExecutor:
                 user_message=user_message,
                 max_tokens=node.focus_prompt.max_tokens,
                 json_mode=True,
+                model=model,
             )
         except OllamaConnectionError:
             raise
@@ -234,5 +266,21 @@ def create_ollama_client(config: SpecForgeConfig) -> OllamaClient:
     return OllamaClient(
         base_url=str(config.ollama_base_url),
         model=config.ollama_model,
+        temperature=config.ollama_temperature,
+    )
+
+
+def create_teacher_client(config: SpecForgeConfig) -> OllamaClient:
+    """Create an OllamaClient configured for the teacher model.
+
+    Args:
+        config: SpecForgeConfig instance (from get_config()).
+
+    Returns:
+        A configured OllamaClient bound to the teacher model.
+    """
+    return OllamaClient(
+        base_url=str(config.ollama_base_url),
+        model=config.ollama_teacher_model,
         temperature=config.ollama_temperature,
     )

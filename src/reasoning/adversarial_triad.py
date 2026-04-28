@@ -78,6 +78,7 @@ class AdversarialTriad:
         node: DAGNode,
         global_state: dict[str, Any],
         input_data: dict[str, Any],
+        model: str | None = None,
     ) -> str:
         """Run the Creator agent — produce the best possible raw output.
 
@@ -115,6 +116,7 @@ class AdversarialTriad:
             input_data=input_data,
             attempt_number=1,
             previous_error=None,
+            model=model,
         )
 
         _log.info(
@@ -172,6 +174,7 @@ class AdversarialTriad:
             input_data={},
             attempt_number=1,
             previous_error=None,
+            model=model,
         )
 
         # Parse the critique JSON
@@ -204,6 +207,7 @@ class AdversarialTriad:
         node: DAGNode,
         global_state: dict[str, Any],
         input_data: dict[str, Any],
+        model: str | None = None,
     ) -> str:
         """Run the Resolver agent — fix only the identified flaw.
 
@@ -253,6 +257,7 @@ class AdversarialTriad:
             input_data=input_data,
             attempt_number=1,
             previous_error=None,
+            model=model,
         )
 
         _log.info(
@@ -269,6 +274,7 @@ class AdversarialTriad:
         node: DAGNode,
         global_state: dict[str, Any],
         input_data: dict[str, Any],
+        model: str | None = None,
     ) -> NodeResult:
         """Execute the full Creator → Cynic → Resolver triad.
 
@@ -286,7 +292,7 @@ class AdversarialTriad:
         start_ms = time.perf_counter()
 
         # Stage 1: Creator
-        creator_output = await self.run_creator(node, global_state, input_data)
+        creator_output = await self.run_creator(node, global_state, input_data, model=model)
         creator_ms = time.perf_counter() - start_ms
 
         # Stage 2: Cynic
@@ -295,7 +301,7 @@ class AdversarialTriad:
 
         # Stage 3: Resolver
         resolver_output = await self.run_resolver(
-            creator_output, cynic_critique, node, global_state, input_data
+            creator_output, cynic_critique, node, global_state, input_data, model=model
         )
         resolver_ms = time.perf_counter() - start_ms - creator_ms - cynic_ms
 

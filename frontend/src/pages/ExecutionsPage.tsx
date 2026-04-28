@@ -97,7 +97,7 @@ export function ExecutionsPage() {
 
       {selected && (
         <ExecutionDetailPanel
-          run={selected}
+          runId={selected.id}
           onClose={() => setSelected(null)}
         />
       )}

@@ -151,6 +151,7 @@ class RetryOrchestrator:
         node: DAGNode,
         global_state: dict[str, Any],
         input_data: dict[str, Any],
+        model: str | None = None,
     ) -> NodeResult:
         """Execute a node with 3-tier retry strategy.
 
@@ -177,6 +178,7 @@ class RetryOrchestrator:
             input_data=input_data,
             attempt_number=1,
             previous_error=None,
+            model=model,
         )
 
         validation = self._validator.validate_output(raw_output, json_schema)
@@ -234,6 +236,7 @@ class RetryOrchestrator:
             input_data=input_data,
             attempt_number=2,
             previous_error="\n".join(validation.errors),
+            model=model,
         )
 
         validation_2 = self._validator.validate_output(raw_output_2, json_schema)

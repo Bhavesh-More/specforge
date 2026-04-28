@@ -10,7 +10,7 @@ from src.cache.redis_client import RedisClient , get_redis_client
 from src.compiler.template_registry import TemplateRegistry
 from src.core.config import get_config
 from src.db.database import async_session_factory
-from src.executor.atomic_executor import OllamaClient, create_ollama_client
+from src.executor.atomic_executor import AtomicExecutor, OllamaClient
 from src.knowledge.graph_manager import KnowledgeGraphManager
 from src.reasoning.confidence_gate import SpecForgeEngine
 from src.symbolic.mcp_client import MCPClient
@@ -56,8 +56,18 @@ async def get_redis() -> RedisClient:
 
 
 async def get_ollama_client() -> OllamaClient:
-    """Return the app-level Ollama client singleton."""
-    return create_ollama_client(get_config())
+    """Return the app-level Ollama client singleton.
+
+    Reads model selection from Redis if set, otherwise uses config defaults.
+    Caches for 30 seconds to avoid Redis round-trips on every request.
+    """
+    from src.cache.redis_client import get_redis_client
+
+    redis = await get_redis_client()
+    cfg = get_config()
+    main = await redis.get("specforge:ollama:main_model") or cfg.ollama_model
+    teacher = await redis.get("specforge:ollama:teacher_model") or cfg.ollama_teacher_model
+    return OllamaClient(base_url=str(cfg.ollama_base_url), model=main, temperature=cfg.ollama_temperature)
 
 
 # ─── Tool registry + MCP client ──────────────────────────────────────────────────
@@ -113,15 +123,20 @@ async def get_healing_orchestrator(
     tracker: FailureTracker = Depends(get_failure_tracker),
     mcp: MCPClient = Depends(get_mcp_client),
 ) -> SelfHealingOrchestrator:
-    """Return a SelfHealingOrchestrator instance."""
+    """Return a SelfHealingOrchestrator instance with Redis-backed model selection."""
+    from src.cache.redis_client import get_redis_client
+
+    redis = await get_redis_client()
     cfg = get_config()
     rules_dir = Path("rules")
-    ollama = create_ollama_client(cfg)
-    teacher = TeacherClient(ollama_client=ollama)
+    main = await redis.get("specforge:ollama:main_model") or cfg.ollama_model
+    teacher = await redis.get("specforge:ollama:teacher_model") or cfg.ollama_teacher_model
+    ollama = OllamaClient(base_url=str(cfg.ollama_base_url), model=main, temperature=cfg.ollama_temperature)
+    teacher_client = OllamaClient(base_url=str(cfg.ollama_base_url), model=teacher, temperature=cfg.ollama_temperature)
     patcher = RulePatcher(rules_dir=rules_dir)
     return SelfHealingOrchestrator(
         tracker=tracker,
-        teacher=teacher,
+        teacher=TeacherClient(ollama_client=teacher_client),
         patcher=patcher,
         rules_dir=rules_dir,
     )

@@ -12,6 +12,7 @@ from src.api.schemas.responses import ExecutionDetail, ExecutionSummary, Paginat
 from src.cache.redis_client import RedisClient
 from src.core.exceptions import TemplateNotFoundError
 from src.core.logging import get_logger
+from src.executor.atomic_executor import _get_stored_ollama_models
 from src.models.execution import ExecutionStatus, ExecutionRun
 from src.reasoning.confidence_gate import SpecForgeEngine
 
@@ -90,11 +91,13 @@ async def start_execution(
 
     async def _execute() -> None:
         try:
+            main_model, teacher_model = await _get_stored_ollama_models()
             result = await engine.execute_template(
                 template=template,
                 input_data=req.input_data,
                 output_dir=output_dir,
                 run_id=run_id,
+                model=main_model,
             )
         except Exception as exc:
             _log.error("background_execution_failed", run_id=run_id, error=str(exc))

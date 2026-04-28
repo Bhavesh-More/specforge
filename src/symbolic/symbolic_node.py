@@ -41,6 +41,7 @@ class SymbolicNodeExecutor:
         node: DAGNode,
         global_state: dict[str, Any],
         input_data: dict[str, Any],
+        model: str | None = None,
     ) -> NodeResult:
         """Execute a SYMBOLIC-type DAG node via MCP tool call.
 
@@ -112,6 +113,7 @@ class SymbolicNodeExecutor:
             input_data=input_data,
             attempt_number=1,
             previous_error=None,
+            model=model,
         )
 
         # ── Phase 2: Parse and execute the tool call ─────────────────────────

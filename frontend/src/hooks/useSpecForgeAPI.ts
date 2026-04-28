@@ -9,6 +9,43 @@ import type {
 
 const API = axios.create({ baseURL: "/api/v1" });
 
+// ─── Ollama ───────────────────────────────────────────────────────────────────
+
+export interface OllamaModel {
+  name: string;
+  size: number | null;
+  modified_at: string | null;
+}
+
+export interface OllamaHealth {
+  status: string;
+  url: string;
+  model: string | null;
+}
+
+export function useOllamaHealth() {
+  return useQuery<OllamaHealth>({
+    queryKey: ["ollama", "health"],
+    queryFn: () => API.get("/ollama/health").then((r) => r.data),
+    refetchInterval: 15000,
+  });
+}
+
+export function useOllamaModels() {
+  return useQuery<OllamaModel[]>({
+    queryKey: ["ollama", "models"],
+    queryFn: async () => {
+      const res = await API.get("/ollama/models");
+      const data = res.data as Record<string, unknown>;
+      return ((data.models || []) as Record<string, unknown>[]).map((m) => ({
+        name: m.name as string,
+        size: m.size as number | null,
+        modified_at: m.modified_at as string | null,
+      }));
+    },
+  });
+}
+
 // ─── Templates ───────────────────────────────────────────────────────────────
 
 export function useTemplates() {
@@ -16,11 +53,23 @@ export function useTemplates() {
     queryKey: ["templates"],
     queryFn: async () => {
       const res = await API.get("/templates");
-      // API may return { templates: [...] } or direct array
       const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.templates && Array.isArray(data.templates)) return data.templates;
-      return [];
+      const rawItems = (data?.items || data?.templates || []) as Record<string, unknown>[];
+      return rawItems.map((item) => {
+        const camel = item as Record<string, unknown>;
+        return {
+          template_id: camel.templateId as string,
+          name: camel.name as string,
+          description: camel.description as string,
+          version: camel.version as string,
+          schema_version: camel.schemaVersion as string,
+          nodes: (camel.nodes || []) as CognitiveTemplate["nodes"],
+          created_at: camel.createdAt as string,
+          updated_at: camel.updatedAt as string,
+          tags: (camel.tags || []) as string[],
+          author: (camel.author || "anonymous") as string,
+        };
+      }) as CognitiveTemplate[];
     },
     refetchInterval: false,
   });
@@ -29,7 +78,22 @@ export function useTemplates() {
 export function useTemplate(id: string) {
   return useQuery<CognitiveTemplate>({
     queryKey: ["templates", id],
-    queryFn: () => API.get(`/templates/${id}`).then((r) => r.data),
+    queryFn: async () => {
+      const res = await API.get(`/templates/${id}`);
+      const data = res.data as Record<string, unknown>;
+      return {
+        template_id: data.templateId as string,
+        name: data.name as string,
+        description: data.description as string,
+        version: data.version as string,
+        schema_version: data.schemaVersion as string,
+        nodes: (data.nodes || []) as CognitiveTemplate["nodes"],
+        created_at: data.createdAt as string,
+        updated_at: data.updatedAt as string,
+        tags: (data.tags || []) as string[],
+        author: (data.author || "anonymous") as string,
+      } as CognitiveTemplate;
+    },
     enabled: !!id,
   });
 }
@@ -42,9 +106,8 @@ export function useExecutions() {
     queryFn: async () => {
       const res = await API.get("/executions");
       const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.executions && Array.isArray(data.executions)) return data.executions;
-      return [];
+      const rawItems = (data?.items || data?.executions || []) as Record<string, unknown>[];
+      return rawItems.map((item) => normalizeExecution(item) as unknown as ExecutionRun);
     },
     refetchInterval: 5000,
   });
@@ -53,11 +116,33 @@ export function useExecutions() {
 export function useExecution(id: string | null) {
   return useQuery<ExecutionRun>({
     queryKey: ["executions", id],
-    queryFn: () => API.get(`/executions/${id}`).then((r) => r.data),
+    queryFn: async () => {
+      const res = await API.get(`/executions/${id}`);
+      return normalizeExecution(res.data) as unknown as ExecutionRun;
+    },
     enabled: !!id,
     refetchInterval: (q) =>
-      q.state.data?.status === "RUNNING" ? 2000 : false,
+      (q.state.data as ExecutionRun | undefined)?.status === "RUNNING" ? 2000 : false,
   });
+}
+
+function normalizeExecution(data: unknown): Record<string, unknown> {
+  const camel = data as Record<string, unknown>;
+  return {
+    id: camel.runId as string,
+    run_id: camel.runId as string,
+    template_id: camel.templateId as string,
+    template_name: camel.templateName as string,
+    status: camel.status as ExecutionRun["status"],
+    input_data: (camel.inputData || {}) as Record<string, unknown>,
+    final_output: camel.finalOutput as ExecutionRun["final_output"],
+    error_message: camel.errorMessage as string | null,
+    started_at: camel.startedAt as string,
+    completed_at: camel.completedAt as string | null,
+    total_execution_time_ms: camel.totalExecutionTimeMs as number | null,
+    state_file_path: camel.stateFilePath as string | null,
+    node_results: (camel.nodeResults || []) as ExecutionRun["node_results"],
+  };
 }
 
 // ─── Knowledge ───────────────────────────────────────────────────────────────
@@ -68,9 +153,12 @@ export function useKnowledgeFiles() {
     queryFn: async () => {
       const res = await API.get("/knowledge/files");
       const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.files && Array.isArray(data.files)) return data.files;
-      return [];
+      const rawItems = (data?.items || data?.files || []) as Record<string, unknown>[];
+      return rawItems.map((item) => ({
+        name: item.name as string,
+        content: item.content as string,
+        linked_files: (item.linkedFiles || []) as string[],
+      })) as KnowledgeFile[];
     },
   });
 }
@@ -78,7 +166,15 @@ export function useKnowledgeFiles() {
 export function useKnowledgeFile(name: string | null) {
   return useQuery<KnowledgeFile>({
     queryKey: ["knowledge", "files", name],
-    queryFn: () => API.get(`/knowledge/files/${name}`).then((r) => r.data),
+    queryFn: async () => {
+      const res = await API.get(`/knowledge/files/${name}`);
+      const data = res.data as Record<string, unknown>;
+      return {
+        name: data.name as string,
+        content: data.content as string,
+        linked_files: (data.linkedFiles || []) as string[],
+      } as KnowledgeFile;
+    },
     enabled: !!name,
   });
 }
@@ -109,9 +205,21 @@ export function useMutations() {
   });
 
   const startExecution = useMutation({
-    mutationFn: (templateId: string) =>
-      API.post(`/executions`, { template_id: templateId }),
+    mutationFn: ({ templateId, inputData }: { templateId: string; inputData: Record<string, unknown> }) =>
+      API.post(`/executions`, { templateId, inputData }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["executions"] }),
+  });
+
+  const uploadTemplate = useMutation({
+    mutationFn: (template: Record<string, unknown>) =>
+      API.post("/templates", template),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["templates"] }),
+  });
+
+  const updateOllamaConfig = useMutation({
+    mutationFn: (config: { mainModel: string; teacherModel: string }) =>
+      API.put("/ollama/config", config),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ollama"] }),
   });
 
   return {
@@ -120,7 +228,18 @@ export function useMutations() {
     approveHealingEvent,
     rejectHealingEvent,
     startExecution,
+    uploadTemplate,
+    updateOllamaConfig,
   };
+}
+
+// ─── Ollama Config ─────────────────────────────────────────────────────────────
+
+export function useOllamaConfig() {
+  return useQuery<{ mainModel: string; teacherModel: string }>({
+    queryKey: ["ollama", "config"],
+    queryFn: () => API.get("/ollama/config").then((r) => r.data),
+  });
 }
 
 // ─── Healing ───────────────────────────────────────────────────────────────
@@ -131,9 +250,21 @@ export function useHealingEvents() {
     queryFn: async () => {
       const res = await API.get("/healing/events");
       const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.events && Array.isArray(data.events)) return data.events;
-      return [];
+      const rawItems = (data?.items || data?.events || []) as Record<string, unknown>[];
+      return rawItems.map((item) => ({
+        id: item.eventId as string,
+        triggered_at: item.triggeredAt as string,
+        trigger_type: item.trigger as string,
+        node_id: item.nodeId as string,
+        template_id: item.templateId as string,
+        failure_count: item.failureCount as number,
+        failure_examples: (item.failureExamples || []) as string[],
+        teacher_model: item.teacherModelUsed as string,
+        patches: (item.patches || []) as string[],
+        applied: item.applied as boolean,
+        applied_at: item.appliedAt as string | null,
+        approved_by: item.approvedBy as string | null,
+      })) as HealingEvent[];
     },
     refetchInterval: 10000,
   });

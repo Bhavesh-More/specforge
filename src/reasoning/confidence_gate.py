@@ -9,6 +9,7 @@ from typing import Any
 from src.core.logging import get_logger
 from src.core.exceptions import NodeExecutionError
 from src.executor.result_weaver import ResultWeaver, StateFileWriter
+from src.executor.atomic_executor import _get_stored_ollama_models
 from src.compiler.template_registry import TemplateRegistry
 from src.knowledge.graph_manager import KnowledgeGraphManager
 from src.models.cognitive_template import CognitiveTemplate, DAGNode, ExecutionTier, NodeType
@@ -62,6 +63,7 @@ class ConfidenceGate:
         input_data: dict[str, Any],
         template_id: str,
         run_id: str,
+        model: str | None = None,
     ) -> NodeResult:
         """Execute a single node through the appropriate tier.
 
@@ -85,12 +87,12 @@ class ConfidenceGate:
         # ── STEP 1: Pre-route based on NodeType ─────────────────────────────
 
         if node.node_type == NodeType.SYMBOLIC:
-            result = await self._symbolic.execute(node, global_state, input_data)
+            result = await self._symbolic.execute(node, global_state, input_data, model=model)
             self._tracker.record_success(template_id, node.node_id)
             return result
 
         if node.node_type == NodeType.ADVERSARIAL:
-            result = await self._triad.execute_triad(node, global_state, input_data)
+            result = await self._triad.execute_triad(node, global_state, input_data, model=model)
             if result.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
                 self._tracker.record_success(template_id, node.node_id)
                 _log.info(
@@ -104,7 +106,7 @@ class ConfidenceGate:
                     node_id=node.node_id,
                     template_id=template_id,
                 )
-                fallback = await self._retry.execute_with_retry(node, global_state, input_data)
+                fallback = await self._retry.execute_with_retry(node, global_state, input_data, model=model)
                 if fallback.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
                     self._tracker.record_success(template_id, node.node_id)
                     return fallback
@@ -115,7 +117,7 @@ class ConfidenceGate:
             return result
 
         if node.node_type == NodeType.LOOKAHEAD:
-            result = await self._lookahead.execute_with_lookahead(node, global_state, input_data)
+            result = await self._lookahead.execute_with_lookahead(node, global_state, input_data, model=model)
             if result.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
                 self._tracker.record_success(template_id, node.node_id)
                 _log.info(
@@ -129,7 +131,7 @@ class ConfidenceGate:
                     node_id=node.node_id,
                     template_id=template_id,
                 )
-                fallback = await self._retry.execute_with_retry(node, global_state, input_data)
+                fallback = await self._retry.execute_with_retry(node, global_state, input_data, model=model)
                 if fallback.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2, NodeStatus.PASSED_TIER3}:
                     self._tracker.record_success(template_id, node.node_id)
                     return fallback
@@ -141,7 +143,7 @@ class ConfidenceGate:
 
         # ── STEP 2: Fast + Repair tiers (STANDARD / PARALLEL) ─────────────
 
-        result = await self._retry.execute_with_retry(node, global_state, input_data)
+        result = await self._retry.execute_with_retry(node, global_state, input_data, model=model)
 
         if result.status in {NodeStatus.PASSED_TIER1, NodeStatus.PASSED_TIER2}:
             self._tracker.record_success(template_id, node.node_id)
@@ -247,6 +249,7 @@ class SpecForgeEngine:
         input_data: dict[str, Any],
         output_dir: Path,
         run_id: str | None = None,
+        model: str | None = None,
     ) -> ExecutionRun:
         """Execute an entire CognitiveTemplate end-to-end.
 
@@ -255,6 +258,7 @@ class SpecForgeEngine:
             input_data: Top-level input payload.
             output_dir: Directory for state.md and other outputs.
             run_id: Optional run ID; generated if not provided.
+            model: Override model for this run (overrides Redis-stored selection).
 
         Returns:
             A completed ExecutionRun with all node results and final output.
@@ -263,6 +267,11 @@ class SpecForgeEngine:
 
         rid = run_id or str(uuid.uuid4())
         start_ms = time.perf_counter()
+
+        # Resolve model: param > Redis stored > env default
+        if model is None:
+            main_model, _ = await _get_stored_ollama_models()
+            model = main_model
 
         execution_run = ExecutionRun(
             run_id=rid,
@@ -302,6 +311,7 @@ class SpecForgeEngine:
                     input_data=input_data,
                     template_id=template.template_id,
                     run_id=rid,
+                    model=model,
                 )
                 for node_id in wave
             ]

@@ -93,7 +93,7 @@
                   "actual": {"type": "string"}
                 }
               },
-              "minItems": 3,
+              "minItems": 1,
               "maxItems": 10
             }
           }

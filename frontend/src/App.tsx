@@ -5,6 +5,7 @@ import { TemplatesPage } from "./pages/TemplatesPage";
 import { ExecutionsPage } from "./pages/ExecutionsPage";
 import { KnowledgePage } from "./pages/KnowledgePage";
 import { HealingPage } from "./pages/HealingPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import "./index.css";
 
 const queryClient = new QueryClient();
@@ -19,6 +20,7 @@ export default function App() {
             <Route path="/executions" element={<ExecutionsPage />} />
             <Route path="/knowledge" element={<KnowledgePage />} />
             <Route path="/healing" element={<HealingPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/" element={<TemplatesPage />} />
           </Routes>
         </Layout>

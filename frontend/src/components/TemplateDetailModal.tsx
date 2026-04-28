@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -22,9 +22,13 @@ const NODE_TYPE_COLORS: Record<NodeType, string> = {
 interface Props {
   template: CognitiveTemplate;
   onClose: () => void;
+  onRun: (templateId: string, inputData: Record<string, unknown>) => void;
+  isRunning?: boolean;
 }
 
-export function TemplateDetailModal({ template, onClose }: Props) {
+export function TemplateDetailModal({ template, onClose, onRun, isRunning }: Props) {
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
+  const [showInputForm, setShowInputForm] = useState(false);
   const initialNodes = useMemo(() => {
     return template.nodes.map((node, i) => ({
       id: node.node_id,
@@ -160,26 +164,45 @@ export function TemplateDetailModal({ template, onClose }: Props) {
               ))}
             </div>
 
-            <div>
-              <div className="font-mono text-xs uppercase tracking-[1.2px] text-sf-text-muted mb-3">
-                Execution Plan
-              </div>
-              {executionWaves.map((wave, i) => (
-                <div key={i} className="mb-2">
-                  <div className="text-xs text-sf-text-muted mb-1">Wave {i}</div>
-                  <div className="flex flex-wrap gap-1">
-                    {wave.map((nodeId) => (
-                      <span
-                        key={nodeId}
-                        className="inline-flex px-2 py-[2px] rounded-pill text-xs text-sf-text bg-sf-surface border border-sf-border-standard"
-                      >
-                        {nodeId}
-                      </span>
-                    ))}
-                  </div>
+            {showInputForm ? (
+              <div className="mt-4">
+                <div className="font-mono text-xs uppercase tracking-[1.2px] text-sf-text-muted mb-3">
+                  Input Variables
                 </div>
-              ))}
-            </div>
+                {template.nodes[0]?.focus_prompt.required_variables.map((v) => (
+                  <div key={v} className="mb-2">
+                    <label className="block text-xs text-sf-text-muted mb-1">{v}</label>
+                    <input
+                      value={inputValues[v] || ""}
+                      onChange={(e) => setInputValues((prev) => ({ ...prev, [v]: e.target.value }))}
+                      className="w-full bg-sf-surface border border-sf-border-standard rounded px-2 py-1 text-sm text-sf-text focus:outline-none focus:border-sf-green"
+                      placeholder={`Enter ${v}…`}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <>
+                <div className="font-mono text-xs uppercase tracking-[1.2px] text-sf-text-muted mb-3">
+                  Execution Plan
+                </div>
+                {executionWaves.map((wave, i) => (
+                  <div key={i} className="mb-2">
+                    <div className="text-xs text-sf-text-muted mb-1">Wave {i}</div>
+                    <div className="flex flex-wrap gap-1">
+                      {wave.map((nodeId) => (
+                        <span
+                          key={nodeId}
+                          className="inline-flex px-2 py-[2px] rounded-pill text-xs text-sf-text bg-sf-surface border border-sf-border-standard"
+                        >
+                          {nodeId}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
 
           {/* Right panel — DAG */}
@@ -203,9 +226,29 @@ export function TemplateDetailModal({ template, onClose }: Props) {
           <button onClick={onClose} className="px-4 py-[6px] rounded-btn text-sm text-sf-text-muted hover:text-sf-text transition-colors">
             Cancel
           </button>
-          <button className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)]">
-            Run Template →
-          </button>
+          {showInputForm ? (
+            <button
+              onClick={() => {
+                const inputData: Record<string, unknown> = {};
+                template.nodes[0]?.focus_prompt.required_variables.forEach((v) => {
+                  if (inputValues[v]) inputData[v] = inputValues[v];
+                });
+                onRun(template.template_id, inputData);
+              }}
+              disabled={isRunning}
+              className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)] disabled:opacity-50"
+            >
+              {isRunning ? "Running…" : "Confirm & Run →"}
+            </button>
+          ) : (
+            <button
+              onClick={() => setShowInputForm(true)}
+              disabled={isRunning}
+              className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)] disabled:opacity-50"
+            >
+              Run Template →
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -74,6 +74,7 @@ class LookaheadDAG:
         node: DAGNode,
         global_state: dict[str, Any],
         input_data: dict[str, Any],
+        model: str | None = None,
     ) -> list[HypothesisPath]:
         """Run path_count parallel inference calls with slightly varied temperature.
 
@@ -106,6 +107,7 @@ class LookaheadDAG:
                 input_data=input_data,
                 attempt_number=1,
                 previous_error=None,
+                model=model,
             )
 
             validation = self._validator.validate_output(
@@ -205,6 +207,7 @@ class LookaheadDAG:
         self,
         hypotheses: list[HypothesisPath],
         node: DAGNode,
+        model: str | None = None,
     ) -> HypothesisPath:
         """Score all hypotheses and select the best valid one.
 
@@ -237,7 +240,7 @@ class LookaheadDAG:
             return valid[0]
 
         # Multiple valid — use evaluator LLM to pick best
-        best = await self._llm_evaluate(valid, node)
+        best = await self._llm_evaluate(valid, node, model=model)
         _log.info(
             "lookahead_evaluator_selected",
             node_id=node.node_id,
@@ -250,6 +253,7 @@ class LookaheadDAG:
         self,
         candidates: list[HypothesisPath],
         node: DAGNode,
+        model: str | None = None,
     ) -> HypothesisPath:
         """Lightweight LLM evaluator to pick best among valid candidates.
 
@@ -305,6 +309,7 @@ class LookaheadDAG:
                 input_data={},
                 attempt_number=1,
                 previous_error=None,
+                model=model,
             )
 
             chosen_id = raw_output_eval.strip().upper()[:1]
@@ -322,6 +327,7 @@ class LookaheadDAG:
         node: DAGNode,
         global_state: dict[str, Any],
         input_data: dict[str, Any],
+        model: str | None = None,
     ) -> NodeResult:
         """Execute a node using lookahead hypothesis generation.
 
@@ -334,8 +340,8 @@ class LookaheadDAG:
             A NodeResult with tier_used=ExecutionTier.DEEP and
             metadata about which path won.
         """
-        hypotheses = await self.generate_hypotheses(node, global_state, input_data)
-        winner = await self.evaluate_and_select(hypotheses, node)
+        hypotheses = await self.generate_hypotheses(node, global_state, input_data, model=model)
+        winner = await self.evaluate_and_select(hypotheses, node, model=model)
 
         _log.info(
             "lookahead_execution_complete",

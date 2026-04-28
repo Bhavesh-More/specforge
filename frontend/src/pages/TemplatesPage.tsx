@@ -1,23 +1,77 @@
 import { useState } from "react";
 import { Upload } from "lucide-react";
-import { useTemplates } from "../hooks/useSpecForgeAPI";
+import { useTemplates, useMutations } from "../hooks/useSpecForgeAPI";
 import { TemplateDetailModal } from "../components/TemplateDetailModal";
 import type { CognitiveTemplate } from "../types";
+import { useQueryClient } from "@tanstack/react-query";
+import axios from "axios";
 
 export function TemplatesPage() {
+  const qc = useQueryClient();
   const { data, isLoading, error } = useTemplates();
+  const { startExecution, uploadTemplate } = useMutations();
   const templates = Array.isArray(data) ? data : [];
   const [selected, setSelected] = useState<CognitiveTemplate | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  function openTemplate(tpl: CognitiveTemplate) {
-    setSelected(tpl);
-    setDetailOpen(true);
+  async function openTemplate(tpl: CognitiveTemplate) {
+    try {
+      const res = await axios.get(`/api/v1/templates/${tpl.template_id}`);
+      const data = res.data as Record<string, unknown>;
+      const full: CognitiveTemplate = {
+        template_id: data.templateId as string,
+        name: data.name as string,
+        description: data.description as string,
+        version: data.version as string,
+        schema_version: data.schemaVersion as string,
+        nodes: (data.nodes || []) as CognitiveTemplate["nodes"],
+        created_at: data.createdAt as string,
+        updated_at: data.updatedAt as string,
+        tags: (data.tags || []) as string[],
+        author: (data.author || "anonymous") as string,
+      };
+      setSelected(full);
+      setDetailOpen(true);
+    } catch {
+      // fallback: open with summary data if detail fetch fails
+      setSelected(tpl);
+      setDetailOpen(true);
+    }
   }
 
   function closeDetail() {
     setDetailOpen(false);
     setSelected(null);
+  }
+
+  function handleRun(templateId: string, inputData: Record<string, unknown>) {
+    startExecution.mutate(
+      { templateId, inputData },
+      {
+        onSuccess: () => closeDetail(),
+      }
+    );
+  }
+
+  function handleUploadClick() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,.ct.json";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        uploadTemplate.mutate(json, {
+          onSuccess: () => qc.invalidateQueries({ queryKey: ["templates"] }),
+          onError: (err) => alert("Upload failed: " + (err as Error).message),
+        });
+      } catch (err) {
+        alert("Invalid JSON: " + (err as Error).message);
+      }
+    };
+    input.click();
   }
 
   if (isLoading) {
@@ -32,7 +86,10 @@ export function TemplatesPage() {
         <p className="text-sm text-sf-text-muted">
           Upload a .ct.json file to get started
         </p>
-        <button className="mt-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text">
+        <button
+          onClick={handleUploadClick}
+          className="mt-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text"
+        >
           <Upload size={14} className="inline mr-2" />
           Upload Template
         </button>
@@ -50,7 +107,10 @@ export function TemplatesPage() {
             {templates.length} templates
           </span>
         </div>
-        <button className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text">
+        <button
+          onClick={handleUploadClick}
+          className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text"
+        >
           <Upload size={14} />
           Upload Template
         </button>
@@ -123,7 +183,12 @@ export function TemplatesPage() {
       </div>
 
       {detailOpen && selected && (
-        <TemplateDetailModal template={selected} onClose={closeDetail} />
+        <TemplateDetailModal
+          template={selected}
+          onClose={closeDetail}
+          onRun={handleRun}
+          isRunning={startExecution.isPending}
+        />
       )}
     </div>
   );
