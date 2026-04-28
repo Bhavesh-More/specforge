@@ -57,9 +57,10 @@ class StateFileWriter:
             f"**Started:** {timestamp}\n"
             f"**Status:** RUNNING\n\n---\n\n"
         )
+        run.state_file_path = str(self._path)
         async with aiofiles.open(self._path, "w", encoding="utf-8") as fh:
             await fh.write(header)
-        _log.info("state_file_initialized", run_id=run.run_id, path=str(self._path))
+        _log.debug("state_file_initialized", run_id=run.run_id, path=str(self._path))
 
     async def append_node_result(self, node: DAGNode, result: NodeResult) -> None:
         """Append a node result section to state.md.
@@ -94,7 +95,7 @@ class StateFileWriter:
         async with aiofiles.open(self._path, "a", encoding="utf-8") as fh:
             await fh.write(section)
 
-        _log.info(
+        _log.debug(
             "node_result_appended",
             node_id=node.node_id,
             status=result.status.value,
@@ -142,7 +143,7 @@ class StateFileWriter:
         async with aiofiles.open(self._path, "w", encoding="utf-8") as fh:
             await fh.write(content)
 
-        _log.info(
+        _log.debug(
             "state_file_finalized",
             run_id=run.run_id,
             success=success,

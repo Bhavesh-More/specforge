@@ -276,22 +276,38 @@ class LookaheadDAG:
             f"Respond with ONLY the path ID: A, B, C, etc."
         )
 
+        judge_system = (
+            "You are a strict evaluator. Choose the best candidate output. "
+            "Respond with only a single path id such as A, B, or C."
+        )
+        judge_user = (
+            f"Task: {node.description}\n\n"
+            f"Candidates:\n{formatted}\n\n"
+            "Return only the best path id."
+        )
+
+        judge_node = node.model_copy(
+            update={
+                "focus_prompt": node.focus_prompt.model_copy(
+                    update={
+                        "system_prompt": judge_system,
+                        "user_template": judge_user,
+                        "required_variables": [],
+                    }
+                )
+            }
+        )
+
         try:
-            raw = await self._executor.execute_node(
-                node=node,
+            raw_output_eval, _ = await self._executor.execute_node(
+                node=judge_node,
                 global_state={},
                 input_data={},
                 attempt_number=1,
                 previous_error=None,
             )
-            # The executor returns (raw_output, rule_files)
-            if isinstance(raw, tuple):
-                raw_output_eval, _ = raw
-            else:
-                raw_output_eval = raw
 
-            # Try to parse a path ID from response
-            chosen_id = raw_output_eval.strip()[-1].upper()
+            chosen_id = raw_output_eval.strip().upper()[:1]
             for c in candidates:
                 if c.path_id == chosen_id:
                     return c

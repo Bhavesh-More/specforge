@@ -26,6 +26,22 @@ def _run_key(run_id: str) -> str:
     return f"specforge:execution:{run_id}"
 
 
+def _resolve_state_path(run_dict: dict[str, object], run_id: str) -> Path | None:
+    """Resolve the state.md path from execution metadata or legacy layout."""
+    state_path = run_dict.get("state_file_path")
+    if isinstance(state_path, str) and state_path:
+        candidate = Path(state_path)
+        if candidate.is_file():
+            return candidate
+
+    for base in (Path("output"), Path("outputs")):
+        candidate = base / run_id / "state.md"
+        if candidate.is_file():
+            return candidate
+
+    return None
+
+
 @router.post("/executions", response_model=ExecutionSummary, status_code=status.HTTP_202_ACCEPTED)
 async def start_execution(
     req: StartExecutionRequest,
@@ -63,6 +79,14 @@ async def start_execution(
     # Background execution
     output_dir = Path(req.output_dir) / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
+    state_path = output_dir / "state.md"
+    run.state_file_path = str(state_path)
+
+    _log.debug(
+        "execution_state_path_prepared",
+        run_id=run_id,
+        path=str(state_path),
+    )
 
     async def _execute() -> None:
         try:
@@ -80,6 +104,7 @@ async def start_execution(
                 template_name=template.name,
                 status=ExecutionStatus.FAILED,
                 error_message=str(exc),
+                state_file_path=str(state_path),
             )
         await redis.set(_run_key(run_id), result.model_dump_json(), ex=86400)
 
@@ -133,13 +158,9 @@ async def get_execution_state(
         raise HTTPException(status_code=404, detail="Execution run not found")
 
     run_dict = json.loads(raw)
-    state_path = run_dict.get("state_file_path")
-    if not state_path:
+    path = _resolve_state_path(run_dict, run_id)
+    if path is None:
         raise HTTPException(status_code=404, detail="state.md not yet generated")
-
-    path = Path(state_path)
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="state.md not found on disk")
 
     return FileResponse(path, media_type="text/markdown")
 

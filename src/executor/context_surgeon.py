@@ -14,6 +14,7 @@ from src.models.cognitive_template import DAGNode
 _log = get_logger(__name__)
 
 WIKI_LINK_PATTERN = re.compile(r"\[\[([^\]]+)\]\]")
+TEMPLATE_VAR_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_\.]*?)\}")
 
 
 def estimate_tokens(text: str) -> int:
@@ -210,6 +211,14 @@ class ContextSurgeon:
         combined.update(input_data)
         combined.update(global_state)
 
+        _log.debug(
+            "node_input_resolution",
+            node_id=node.node_id,
+            input_keys=sorted(input_data.keys()),
+            global_state_keys=sorted(global_state.keys()),
+            combined_keys=sorted(combined.keys()),
+        )
+
         # Flatten into dot-notation keys for interpolation
         flat = self._flatten_variables(combined)
 
@@ -217,6 +226,12 @@ class ContextSurgeon:
         # references like "metadata.title" are validated here, not later
         for var in node.focus_prompt.required_variables:
             if var not in flat:
+                _log.warning(
+                    "missing_required_variable",
+                    node_id=node.node_id,
+                    missing_variable=var,
+                    available_keys=list(flat.keys()),
+                )
                 raise NodeExecutionError(
                     node_id=node.node_id,
                     attempt_count=0,
@@ -321,7 +336,7 @@ class ContextSurgeon:
                 return json.dumps(value, indent=2)
             return str(value)
 
-        return re.sub(r"\{([^{}]+)\}", replacer, template)
+        return TEMPLATE_VAR_PATTERN.sub(replacer, template)
 
     # ─── Build final prompt ─────────────────────────────────────────────────────
 

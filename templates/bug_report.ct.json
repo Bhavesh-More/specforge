@@ -1,4 +1,5 @@
 {
+  "template_id": "bug_report",
   "version": "1.0.0",
   "name": "Bug Report Cognitive Template",
   "description": "Generates structured bug reports from raw error descriptions using a 6-node adversarial reasoning pipeline",

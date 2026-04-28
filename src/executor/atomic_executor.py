@@ -1,6 +1,7 @@
 """Ollama inference layer — execute atomic LLM nodes."""
 
 import httpx
+from typing import Any
 
 from src.core.config import SpecForgeConfig
 from src.core.exceptions import NodeExecutionError, OllamaConnectionError
