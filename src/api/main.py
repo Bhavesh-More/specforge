@@ -15,6 +15,7 @@ from src.core.logging import get_logger
 from src.db.database import AsyncEngine, async_session_factory
 from src.knowledge.graph_manager import KnowledgeGraphManager
 from src.executor.atomic_executor import OllamaClient, create_ollama_client
+from src.cache.redis_client import get_redis_client
 
 _log = get_logger(__name__)
 
@@ -33,7 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     cfg = get_config()
 
     # Check Ollama health
-    ollama_client = create_ollama_client(cfg)
+    ollama_client = create_ollama_client(base_url=str(cfg.ollama_base_url), model="llama3.2")
     ollama_healthy = await ollama_client.health_check()
     if not ollama_healthy:
         _log.warning("ollama_health_check_failed", url=str(cfg.ollama_base_url))
@@ -112,12 +113,13 @@ def create_app() -> FastAPI:
         )
 
     # Register routers
-    from src.api.routers import executions, healing, knowledge, templates
+    from src.api.routers import executions, healing, knowledge, templates, models
 
     app.include_router(templates.router, prefix="/api/v1", tags=["templates"])
     app.include_router(executions.router, prefix="/api/v1", tags=["executions"])
     app.include_router(knowledge.router, prefix="/api/v1", tags=["knowledge"])
     app.include_router(healing.router, prefix="/api/v1", tags=["healing"])
+    app.include_router(models.router, prefix="/api/v1", tags=["models"])
 
     return app
 

@@ -75,7 +75,7 @@ async def create_template(
     import uuid
 
     template_data = {
-        "template_id": str(uuid.uuid4()),
+        "template_id": req.template_id or str(uuid.uuid4()),
         "name": req.name,
         "description": req.description,
         "version": req.version,

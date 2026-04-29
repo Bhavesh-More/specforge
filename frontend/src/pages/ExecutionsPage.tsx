@@ -2,7 +2,6 @@ import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { useExecutions } from "../hooks/useSpecForgeAPI";
 import { ExecutionDetailPanel } from "../components/ExecutionDetailPanel";
-import type { ExecutionRun } from "../types";
 
 const STATUS_CLASSES: Record<string, string> = {
   PENDING: "bg-[rgba(245,158,11,0.1)] border-[rgba(245,158,11,0.3)] text-sf-amber",
@@ -26,7 +25,7 @@ function StatusBadge({ status }: { status: string }) {
 
 export function ExecutionsPage() {
   const { data: runs, isLoading } = useExecutions();
-  const [selected, setSelected] = useState<ExecutionRun | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   if (isLoading) return <Skeleton />;
   if (!runs?.length) {
@@ -68,7 +67,7 @@ export function ExecutionsPage() {
             {runs.map((run) => (
               <tr
                 key={run.id}
-                onClick={() => setSelected(run)}
+                onClick={() => setSelectedRunId(run.id)}
                 className="border-b border-sf-border cursor-pointer transition-colors duration-100 hover:bg-[rgba(255,255,255,0.03)]"
               >
                 <td className="px-4 py-3 font-mono text-xs text-sf-text-muted">
@@ -95,10 +94,10 @@ export function ExecutionsPage() {
         </table>
       </div>
 
-      {selected && (
+      {selectedRunId && (
         <ExecutionDetailPanel
-          run={selected}
-          onClose={() => setSelected(null)}
+          runId={selectedRunId}
+          onClose={() => setSelectedRunId(null)}
         />
       )}
     </div>

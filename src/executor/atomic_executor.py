@@ -3,7 +3,6 @@
 import httpx
 from typing import Any
 
-from src.core.config import SpecForgeConfig
 from src.core.exceptions import NodeExecutionError, OllamaConnectionError
 from src.core.logging import get_logger
 from src.executor.context_surgeon import ContextSurgeon
@@ -222,17 +221,23 @@ class AtomicExecutor:
 # ─── Factory ───────────────────────────────────────────────────────────────────
 
 
-def create_ollama_client(config: SpecForgeConfig) -> OllamaClient:
-    """Create an OllamaClient from application configuration.
+def create_ollama_client(
+    base_url: str,
+    model: str,
+    temperature: float = 0.3,
+) -> OllamaClient:
+    """Create an OllamaClient from base URL and model name.
 
     Args:
-        config: SpecForgeConfig instance (from get_config()).
+        base_url: Ollama server base URL (e.g. 'http://localhost:11434').
+        model: Model name to use for generation.
+        temperature: Sampling temperature.
 
     Returns:
-        A configured OllamaClient bound to the configured base URL and model.
+        A configured OllamaClient bound to the given base URL and model.
     """
     return OllamaClient(
-        base_url=str(config.ollama_base_url),
-        model=config.ollama_model,
-        temperature=config.ollama_temperature,
+        base_url=base_url,
+        model=model,
+        temperature=temperature,
     )

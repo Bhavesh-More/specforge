@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   ReactFlow,
   Background,
@@ -22,11 +22,31 @@ const NODE_TYPE_COLORS: Record<NodeType, string> = {
 interface Props {
   template: CognitiveTemplate;
   onClose: () => void;
+  onRun?: (templateId: string, inputData: Record<string, unknown>) => void;
+  isRunning?: boolean;
 }
 
-export function TemplateDetailModal({ template, onClose }: Props) {
+export function TemplateDetailModal({ template, onClose, onRun, isRunning }: Props) {
+  const [showInput, setShowInput] = useState(false);
+  const [inputValue, setInputValue] = useState("");
+
+  function handleRunClick() {
+    if (showInput) {
+      onRun?.(template.template_id, { description: inputValue });
+      setShowInput(false);
+      setInputValue("");
+    } else {
+      setShowInput(true);
+    }
+  }
+
+  function handleCancelRun() {
+    setShowInput(false);
+    setInputValue("");
+  }
+
   const initialNodes = useMemo(() => {
-    return template.nodes.map((node, i) => ({
+    return (template.nodes || []).map((node, i) => ({
       id: node.node_id,
       position: { x: 250, y: i * 130 },
       data: { label: node.node_id, nodeType: node.node_type, description: node.description },
@@ -200,12 +220,48 @@ export function TemplateDetailModal({ template, onClose }: Props) {
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-sf-border">
-          <button onClick={onClose} className="px-4 py-[6px] rounded-btn text-sm text-sf-text-muted hover:text-sf-text transition-colors">
-            Cancel
-          </button>
-          <button className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)]">
-            Run Template →
-          </button>
+          {showInput ? (
+            <>
+              <input
+                type="text"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                placeholder="Describe the error to process..."
+                className="flex-1 bg-sf-surface border border-sf-border-standard rounded-btn px-3 py-[6px] text-sm text-sf-text placeholder:text-sf-text-muted font-mono"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRunClick();
+                  if (e.key === "Escape") handleCancelRun();
+                }}
+                autoFocus
+              />
+              <button
+                onClick={handleCancelRun}
+                className="px-4 py-[6px] rounded-btn text-sm text-sf-text-muted hover:text-sf-text transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRunClick}
+                disabled={isRunning || !inputValue.trim()}
+                className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)] hover:bg-[rgba(62,207,142,0.1)] transition-colors disabled:opacity-50"
+              >
+                {isRunning ? "Starting…" : "Run →"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={onClose} className="px-4 py-[6px] rounded-btn text-sm text-sf-text-muted hover:text-sf-text transition-colors">
+                Cancel
+              </button>
+              <button
+                onClick={handleRunClick}
+                disabled={isRunning}
+                className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)] hover:bg-[rgba(62,207,142,0.1)] transition-colors disabled:opacity-50"
+              >
+                {isRunning ? "Starting…" : "Run Template →"}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>

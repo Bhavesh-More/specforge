@@ -4,6 +4,7 @@ import {
   PlayCircle,
   BookOpen,
   HeartCrack,
+  Settings,
 } from "lucide-react";
 import { useAppStore } from "../stores/appStore";
 
@@ -12,6 +13,7 @@ const NAV_ITEMS = [
   { to: "/executions", icon: PlayCircle, label: "Executions" },
   { to: "/knowledge", icon: BookOpen, label: "Knowledge" },
   { to: "/healing", icon: HeartCrack, label: "Healing" },
+  { to: "/settings", icon: Settings, label: "Settings" },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {

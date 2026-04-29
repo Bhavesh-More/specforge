@@ -60,6 +60,15 @@ export interface NodeResult {
   execution_time_ms: number;
   validation_errors: string[];
   error_message: string | null;
+  parsed_output: Record<string, unknown> | null;
+  raw_output: string | null;
+  validation_result?: {
+    is_valid: boolean;
+    errors: string[];
+    raw_output: string;
+    parsed_output: Record<string, unknown>;
+    validation_time_ms: number;
+  };
   created_at: string;
 }
 

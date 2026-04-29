@@ -57,7 +57,20 @@ async def get_redis() -> RedisClient:
 
 async def get_ollama_client() -> OllamaClient:
     """Return the app-level Ollama client singleton."""
-    return create_ollama_client(get_config())
+    cfg = get_config()
+    return create_ollama_client(base_url=str(cfg.ollama_base_url), model="llama3.2")
+
+
+async def get_selected_model(redis: RedisClient = Depends(get_redis)) -> str:
+    """Return the currently selected default model from Redis."""
+    val = await redis.get("specforge:settings:default_model")
+    return val if val else "llama3.2"
+
+
+async def get_teacher_model(redis: RedisClient = Depends(get_redis)) -> str:
+    """Return the currently selected teacher model from Redis."""
+    val = await redis.get("specforge:settings:teacher_model")
+    return val if val else "llama3.1:8b"
 
 
 # ─── Tool registry + MCP client ──────────────────────────────────────────────────
@@ -112,12 +125,14 @@ async def get_failure_tracker() -> FailureTracker:
 async def get_healing_orchestrator(
     tracker: FailureTracker = Depends(get_failure_tracker),
     mcp: MCPClient = Depends(get_mcp_client),
+    selected_model: str = Depends(get_selected_model),
+    teacher_model: str = Depends(get_teacher_model),
 ) -> SelfHealingOrchestrator:
     """Return a SelfHealingOrchestrator instance."""
     cfg = get_config()
     rules_dir = Path("rules")
-    ollama = create_ollama_client(cfg)
-    teacher = TeacherClient(ollama_client=ollama)
+    ollama = create_ollama_client(base_url=str(cfg.ollama_base_url), model=selected_model)
+    teacher = TeacherClient(ollama_client=ollama, model=teacher_model)
     patcher = RulePatcher(rules_dir=rules_dir)
     return SelfHealingOrchestrator(
         tracker=tracker,

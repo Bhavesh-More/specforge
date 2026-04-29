@@ -18,6 +18,7 @@ class CreateTemplateRequest(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True, alias_generator=to_camel)
 
+    template_id: str = Field(default="")
     name: str = Field(..., min_length=1, max_length=200)
     description: str = Field(default="", max_length=4000)
     version: str = "1.0.0"

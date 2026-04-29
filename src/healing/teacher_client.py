@@ -3,9 +3,6 @@
 import json
 from typing import Any
 
-import httpx
-
-from src.core.config import SpecForgeConfig
 from src.core.exceptions import HealingError, OllamaConnectionError
 from src.core.logging import get_logger
 from src.executor.atomic_executor import OllamaClient
@@ -29,8 +26,11 @@ class TeacherClient:
         ollama_client: An OllamaClient configured with the teacher model.
     """
 
-    def __init__(self, ollama_client: OllamaClient) -> None:
+    def __init__(self, ollama_client: OllamaClient, model: str) -> None:
         self._client = ollama_client
+        self._model = model
+        # Re-create client with teacher model
+        self._client.model = model
 
     async def diagnose_and_prescribe(
         self,

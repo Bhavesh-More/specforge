@@ -121,7 +121,15 @@ class SchemaValidator:
         Returns:
             A formatted repair instruction string.
         """
-        errors_str = "\n".join(f"- {e}" for e in validation_result.errors)
+        # Deduplicate errors so repair prompt stays clean
+        unique_errors: list[str] = []
+        seen: set[str] = set()
+        for e in validation_result.errors:
+            if e not in seen:
+                seen.add(e)
+                unique_errors.append(e)
+
+        errors_str = "\n".join(f"- {e}" for e in unique_errors)
         schema_str = json.dumps(json_schema, indent=2) if json_schema else "No schema specified"
 
         return (
@@ -262,14 +270,19 @@ class RetryOrchestrator:
 
         # ── TIER 3: Deep Path — signal only ──────────────────────────────────
 
-        # Combine error messages from both failed attempts
-        combined_errors = validation.errors + validation_2.errors
+        # Show only the final tier's errors (deduplicated) so user sees the most relevant failure reason
+        unique_errors: list[str] = []
+        seen: set[str] = set()
+        for e in validation_2.errors:
+            if e not in seen:
+                seen.add(e)
+                unique_errors.append(e)
 
         _log.warning(
             "tier3_triggered",
             node_id=node.node_id,
             attempt_count=2,
-            error_messages=combined_errors,
+            error_messages=unique_errors,
         )
 
         return NodeResult(
@@ -282,7 +295,7 @@ class RetryOrchestrator:
             attempt_count=2,
             execution_time_ms=validation_2.validation_time_ms,
             rule_files_used=rule_files_2,
-            error_message="; ".join(combined_errors),
+            error_message=", ".join(unique_errors),
         )
 
 
@@ -291,5 +304,29 @@ class RetryOrchestrator:
 
 def _simplify_jsonschema_error(exc: jsonschema.ValidationError) -> str:
     """Reduce a verbose jsonschema.ValidationError to a one-line message."""
-    path = ".".join(str(p) for p in exc.path) if exc.path else "<root>"
-    return f"At {'.'.join(str(p) for p in exc.path)}: {exc.message}"
+    if exc.path:
+        path = ".".join(str(p) for p in exc.path)
+        val = exc.instance
+        if exc.validator == "minItems":
+            actual = len(val) if isinstance(val, (list, tuple)) else val
+            return f"At {path}: array has {actual} items, need at least {exc.validator_value}"
+        if exc.validator == "maxItems":
+            actual = len(val) if isinstance(val, (list, tuple)) else val
+            return f"At {path}: array has {actual} items, max allowed is {exc.validator_value}"
+        if exc.validator == "minLength":
+            actual = len(val) if isinstance(val, str) else val
+            return f"At {path}: string has {actual} chars, need at least {exc.validator_value}"
+        if exc.validator == "maxLength":
+            actual = len(val) if isinstance(val, str) else val
+            return f"At {path}: string has {actual} chars, max allowed is {exc.validator_value}"
+        if exc.validator == "minimum":
+            return f"At {path}: value {val} is below minimum {exc.validator_value}"
+        if exc.validator == "maximum":
+            return f"At {path}: value {val} exceeds maximum {exc.validator_value}"
+        if exc.validator == "required":
+            missing = [str(p) for p in exc.path if p not in exc.instance]
+            return f"At {path}: missing required fields: {', '.join(exc.validator_value)}"
+        if exc.validator == "type":
+            return f"At {path}: expected {exc.validator_value}, got {type(val).__name__}"
+        return f"At {path}: {exc.message}"
+    return exc.message

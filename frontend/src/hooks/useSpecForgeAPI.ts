@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import axios from "axios";
+import * as api from "../api/index";
 import type {
   CognitiveTemplate,
   ExecutionRun,
@@ -7,21 +7,12 @@ import type {
   HealingEvent,
 } from "../types";
 
-const API = axios.create({ baseURL: "/api/v1" });
-
 // ─── Templates ───────────────────────────────────────────────────────────────
 
 export function useTemplates() {
   return useQuery<CognitiveTemplate[]>({
     queryKey: ["templates"],
-    queryFn: async () => {
-      const res = await API.get("/templates");
-      // API may return { templates: [...] } or direct array
-      const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.templates && Array.isArray(data.templates)) return data.templates;
-      return [];
-    },
+    queryFn: api.listTemplates,
     refetchInterval: false,
   });
 }
@@ -29,7 +20,7 @@ export function useTemplates() {
 export function useTemplate(id: string) {
   return useQuery<CognitiveTemplate>({
     queryKey: ["templates", id],
-    queryFn: () => API.get(`/templates/${id}`).then((r) => r.data),
+    queryFn: () => api.getTemplate(id).then((r) => r as unknown as CognitiveTemplate),
     enabled: !!id,
   });
 }
@@ -39,13 +30,7 @@ export function useTemplate(id: string) {
 export function useExecutions() {
   return useQuery<ExecutionRun[]>({
     queryKey: ["executions"],
-    queryFn: async () => {
-      const res = await API.get("/executions");
-      const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.executions && Array.isArray(data.executions)) return data.executions;
-      return [];
-    },
+    queryFn: api.listExecutions,
     refetchInterval: 5000,
   });
 }
@@ -53,7 +38,7 @@ export function useExecutions() {
 export function useExecution(id: string | null) {
   return useQuery<ExecutionRun>({
     queryKey: ["executions", id],
-    queryFn: () => API.get(`/executions/${id}`).then((r) => r.data),
+    queryFn: () => api.getExecution(id!) as Promise<ExecutionRun>,
     enabled: !!id,
     refetchInterval: (q) =>
       q.state.data?.status === "RUNNING" ? 2000 : false,
@@ -65,62 +50,16 @@ export function useExecution(id: string | null) {
 export function useKnowledgeFiles() {
   return useQuery<KnowledgeFile[]>({
     queryKey: ["knowledge", "files"],
-    queryFn: async () => {
-      const res = await API.get("/knowledge/files");
-      const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.files && Array.isArray(data.files)) return data.files;
-      return [];
-    },
+    queryFn: api.listKnowledgeFiles,
   });
 }
 
 export function useKnowledgeFile(name: string | null) {
   return useQuery<KnowledgeFile>({
     queryKey: ["knowledge", "files", name],
-    queryFn: () => API.get(`/knowledge/files/${name}`).then((r) => r.data),
+    queryFn: () => api.getKnowledgeFile(name!) as Promise<KnowledgeFile>,
     enabled: !!name,
   });
-}
-
-export function useMutations() {
-  const qc = useQueryClient();
-
-  const createKnowledgeFile = useMutation({
-    mutationFn: (file: { name: string; content: string }) =>
-      API.post("/knowledge/files", file),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["knowledge"] }),
-  });
-
-  const updateKnowledgeFile = useMutation({
-    mutationFn: (file: { name: string; content: string }) =>
-      API.put(`/knowledge/files/${file.name}`, file),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["knowledge"] }),
-  });
-
-  const approveHealingEvent = useMutation({
-    mutationFn: (id: string) => API.post(`/healing/events/${id}/approve`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["healing"] }),
-  });
-
-  const rejectHealingEvent = useMutation({
-    mutationFn: (id: string) => API.post(`/healing/events/${id}/reject`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["healing"] }),
-  });
-
-  const startExecution = useMutation({
-    mutationFn: (templateId: string) =>
-      API.post(`/executions`, { template_id: templateId }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["executions"] }),
-  });
-
-  return {
-    createKnowledgeFile,
-    updateKnowledgeFile,
-    approveHealingEvent,
-    rejectHealingEvent,
-    startExecution,
-  };
 }
 
 // ─── Healing ───────────────────────────────────────────────────────────────
@@ -128,13 +67,95 @@ export function useMutations() {
 export function useHealingEvents() {
   return useQuery<HealingEvent[]>({
     queryKey: ["healing", "events"],
-    queryFn: async () => {
-      const res = await API.get("/healing/events");
-      const data = res.data;
-      if (Array.isArray(data)) return data;
-      if (data?.events && Array.isArray(data.events)) return data.events;
-      return [];
-    },
+    queryFn: api.listHealingEvents,
     refetchInterval: 10000,
+  });
+}
+
+// ─── Mutations ───────────────────────────────────────────────────────────────
+
+export function useMutations() {
+  const qc = useQueryClient();
+
+  const uploadTemplate = useMutation({
+    mutationFn: (template: Record<string, unknown>) => api.uploadTemplate(template),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["templates"] }),
+  });
+
+  const createKnowledgeFile = useMutation({
+    mutationFn: (file: { name: string; content: string }) =>
+      api.createKnowledgeFile(file.name, file.content),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["knowledge"] }),
+  });
+
+  const updateKnowledgeFile = useMutation({
+    mutationFn: (file: { name: string; content: string }) =>
+      api.updateKnowledgeFile(file.name, file.content),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["knowledge"] }),
+  });
+
+  const approveHealingEvent = useMutation({
+    mutationFn: (id: string) => api.approveHealingEvent(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["healing"] }),
+  });
+
+  const rejectHealingEvent = useMutation({
+    mutationFn: (id: string) => api.rejectHealingEvent(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["healing"] }),
+  });
+
+  const startExecution = useMutation({
+    mutationFn: (payload: { templateId: string; inputData?: Record<string, unknown> }) =>
+      api.startExecution(payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["executions"] }),
+  });
+
+  const deleteExecution = useMutation({
+    mutationFn: (id: string) => api.deleteExecution(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["executions"] }),
+  });
+
+  return {
+    uploadTemplate,
+    createKnowledgeFile,
+    updateKnowledgeFile,
+    approveHealingEvent,
+    rejectHealingEvent,
+    startExecution,
+    deleteExecution,
+  };
+}
+
+// ─── Models ─────────────────────────────────────────────────────────────────
+
+export function useOllamaModels() {
+  return useQuery({
+    queryKey: ["ollama", "models"],
+    queryFn: api.listOllamaModels,
+    refetchInterval: 30000,
+  });
+}
+
+export function useSelectedModels() {
+  return useQuery({
+    queryKey: ["ollama", "selected"],
+    queryFn: api.getSelectedModels,
+  });
+}
+
+export function useMutateSelectedModels() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { default_model?: string; teacher_model?: string }) =>
+      api.updateSelectedModels(data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["ollama", "selected"] }),
+  });
+}
+
+export function useOllamaHealth() {
+  return useQuery({
+    queryKey: ["ollama", "health"],
+    queryFn: api.checkOllamaHealth,
+    refetchInterval: 15000,
   });
 }

@@ -1,23 +1,94 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { Upload } from "lucide-react";
-import { useTemplates } from "../hooks/useSpecForgeAPI";
+import { useTemplates, useMutations } from "../hooks/useSpecForgeAPI";
 import { TemplateDetailModal } from "../components/TemplateDetailModal";
 import type { CognitiveTemplate } from "../types";
+import * as api from "../api/index";
 
 export function TemplatesPage() {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
   const { data, isLoading, error } = useTemplates();
+  const { startExecution, uploadTemplate } = useMutations();
   const templates = Array.isArray(data) ? data : [];
   const [selected, setSelected] = useState<CognitiveTemplate | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [runningTemplateId, setRunningTemplateId] = useState<string | null>(null);
 
-  function openTemplate(tpl: CognitiveTemplate) {
-    setSelected(tpl);
-    setDetailOpen(true);
+  async function openTemplate(tpl: CognitiveTemplate) {
+    const id = (tpl as Record<string, unknown>).templateId as string;
+    if (!id) return;
+    try {
+      const res = await api.getTemplate(id);
+      const d = res as Record<string, unknown>;
+      const full: CognitiveTemplate = {
+        template_id: d.templateId as string,
+        name: (d.name as string) || "Unknown",
+        description: (d.description as string) || "",
+        version: (d.version as string) || "1.0.0",
+        schema_version: (d.schemaVersion as string) || "1.0.0",
+        nodes: (d.nodes || []) as CognitiveTemplate["nodes"],
+        created_at: (d.createdAt as string) || new Date().toISOString(),
+        updated_at: (d.updatedAt as string) || new Date().toISOString(),
+        tags: (d.tags || []) as string[],
+        author: (d.author as string) || "anonymous",
+      };
+      setSelected(full);
+      setDetailOpen(true);
+    } catch (e) {
+      console.error("Failed to load template detail", e);
+    }
   }
 
   function closeDetail() {
     setDetailOpen(false);
     setSelected(null);
+  }
+
+  function handleRun(templateId: string, inputData: Record<string, unknown> = {}) {
+    if (!templateId) {
+      alert("Template ID not available. Please reopen the detail.");
+      return;
+    }
+    setRunningTemplateId(templateId);
+    setDetailOpen(false);
+    navigate("/executions");
+    startExecution.mutate(
+      { templateId, inputData },
+      {
+        onSuccess: () => {
+          setRunningTemplateId(null);
+          qc.invalidateQueries({ queryKey: ["executions"] });
+        },
+        onError: (err) => {
+          setRunningTemplateId(null);
+          alert("Run failed: " + (err as Error).message);
+        },
+      }
+    );
+  }
+
+  function handleUploadClick() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,.ct.json";
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        uploadTemplate.mutate(json, {
+          onSuccess: () => qc.invalidateQueries({ queryKey: ["templates"] }),
+          onError: (err) => alert("Upload failed: " + (err as Error).message),
+        });
+      } catch (err) {
+        alert("Invalid JSON: " + (err as Error).message);
+      }
+    };
+    input.click();
   }
 
   if (isLoading) {
@@ -32,7 +103,10 @@ export function TemplatesPage() {
         <p className="text-sm text-sf-text-muted">
           Upload a .ct.json file to get started
         </p>
-        <button className="mt-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text">
+        <button
+          onClick={handleUploadClick}
+          className="mt-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text"
+        >
           <Upload size={14} className="inline mr-2" />
           Upload Template
         </button>
@@ -50,7 +124,10 @@ export function TemplatesPage() {
             {templates.length} templates
           </span>
         </div>
-        <button className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text">
+        <button
+          onClick={handleUploadClick}
+          className="flex items-center gap-2 px-5 py-[6px] rounded-pill text-sm font-medium text-sf-text bg-sf-bg-deep border border-sf-text"
+        >
           <Upload size={14} />
           Upload Template
         </button>
@@ -68,9 +145,6 @@ export function TemplatesPage() {
                 Version
               </th>
               <th className="text-left font-mono text-xs uppercase tracking-[1.2px] text-sf-text-muted px-4 py-[10px]">
-                Nodes
-              </th>
-              <th className="text-left font-mono text-xs uppercase tracking-[1.2px] text-sf-text-muted px-4 py-[10px]">
                 Tags
               </th>
               <th className="text-left font-mono text-xs uppercase tracking-[1.2px] text-sf-text-muted px-4 py-[10px]">
@@ -80,9 +154,9 @@ export function TemplatesPage() {
             </tr>
           </thead>
           <tbody>
-            {templates.map((tpl) => (
+            {templates.map((tpl, idx) => (
               <tr
-                key={tpl.template_id}
+                key={(tpl as Record<string, unknown>).templateId as string || `tpl-${idx}`}
                 onClick={() => openTemplate(tpl)}
                 className="border-b border-sf-border cursor-pointer transition-colors duration-100 hover:bg-[rgba(255,255,255,0.03)]"
               >
@@ -95,12 +169,9 @@ export function TemplatesPage() {
                     v{tpl.version}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-sm text-sf-text-muted">
-                  {tpl.nodes.length} nodes
-                </td>
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1">
-                    {tpl.tags.map((tag) => (
+                    {(tpl.tags || []).map((tag) => (
                       <span
                         key={tag}
                         className="inline-flex px-2 py-[2px] rounded-pill text-xs text-sf-text-muted border border-sf-border-standard"
@@ -123,7 +194,12 @@ export function TemplatesPage() {
       </div>
 
       {detailOpen && selected && (
-        <TemplateDetailModal template={selected} onClose={closeDetail} />
+        <TemplateDetailModal
+          template={selected}
+          onClose={closeDetail}
+          onRun={handleRun}
+          isRunning={runningTemplateId === selected.template_id}
+        />
       )}
     </div>
   );

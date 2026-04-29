@@ -31,8 +31,6 @@ class SpecForgeConfig(BaseSettings):
     redis_url: RedisDsn
     api_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:8000")
     ollama_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:11434")
-    ollama_model: str = "llama3.2"
-    ollama_teacher_model: str = "llama3.1:8b"
     ollama_temperature: float = 0.3
     secret_key: str
     log_level: str = "INFO"
