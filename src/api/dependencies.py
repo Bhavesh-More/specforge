@@ -93,7 +93,9 @@ async def get_mcp_client(
 
 async def get_context_surgeon() -> ContextSurgeon:
     """Return a ContextSurgeon for the rules directory."""
-    return ContextSurgeon(rules_dir=Path("rules"))
+    project_root = Path(__file__).parent.parent.parent
+    rules_dir = project_root / "rules"
+    return ContextSurgeon(rules_dir=rules_dir)
 
 
 async def get_atomic_executor(
@@ -130,7 +132,8 @@ async def get_healing_orchestrator(
 ) -> SelfHealingOrchestrator:
     """Return a SelfHealingOrchestrator instance."""
     cfg = get_config()
-    rules_dir = Path("rules")
+    project_root = Path(__file__).parent.parent.parent
+    rules_dir = project_root / "rules"
     ollama = create_ollama_client(base_url=str(cfg.ollama_base_url), model=selected_model)
     teacher = TeacherClient(ollama_client=ollama, model=teacher_model)
     patcher = RulePatcher(rules_dir=rules_dir)
@@ -171,7 +174,10 @@ async def get_symbolic_executor(
 
 async def get_template_registry() -> TemplateRegistry:
     """Return a TemplateRegistry singleton for the templates directory."""
-    return TemplateRegistry(templates_dir=Path("templates"))
+    # Resolve templates directory relative to project root (parent of src/)
+    project_root = Path(__file__).parent.parent.parent
+    templates_dir = project_root / "templates"
+    return TemplateRegistry(templates_dir=templates_dir)
 
 
 # ─── Knowledge graph manager ────────────────────────────────────────────────────
