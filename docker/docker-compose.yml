@@ -47,8 +47,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./rules:/app/rules
-      - ./templates:/app/templates
+      - ../rules:/app/rules
+      - ../templates:/app/templates
       - ./outputs:/app/outputs
     restart: unless-stopped
 
@@ -66,8 +66,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./rules:/app/rules
-      - ./templates:/app/templates
+      - ../rules:/app/rules
+      - ../templates:/app/templates
       - ./outputs:/app/outputs
     restart: unless-stopped
 

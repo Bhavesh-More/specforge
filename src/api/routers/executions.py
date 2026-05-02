@@ -54,7 +54,10 @@ async def start_execution(
 
     from src.compiler.template_registry import TemplateRegistry
 
-    registry = TemplateRegistry(templates_dir=Path("templates"))
+    # Resolve templates directory relative to project root
+    project_root = Path(__file__).parent.parent.parent
+    templates_dir = project_root / "templates"
+    registry = TemplateRegistry(templates_dir=templates_dir)
 
     try:
         template = await registry.load(req.template_id)
