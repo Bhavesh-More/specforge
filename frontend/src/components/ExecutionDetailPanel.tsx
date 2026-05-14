@@ -49,27 +49,44 @@ interface Props {
   onClose: () => void;
 }
 
+interface ExecutionRunData {
+  id: string;
+  template_name: string;
+  status: string;
+  started_at: string;
+  completed_at?: string | null;
+  total_execution_time_ms?: number | null;
+  final_output?: Record<string, unknown> | null;
+  error_message?: string | null;
+  input_data?: Record<string, unknown>;
+  node_results: Record<string, NodeEntry> | NodeEntry[];
+}
+
 export function ExecutionDetailPanel({ runId, onClose }: Props) {
   const { data: run } = useExecution(runId);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
+  const runData = run as unknown as ExecutionRunData;
+
   useEffect(() => {
-    if (run) {
-      const entries = Object.values(run.node_results as unknown as Record<string, NodeEntry>);
+    if (runData) {
+      const entries = Array.isArray(runData.node_results)
+        ? (runData.node_results as NodeEntry[])
+        : Object.values(runData.node_results as Record<string, NodeEntry> || {});
       if (entries.length > 0 && !selectedNode) {
         setSelectedNode(entries[0].node_id);
       }
     }
-  }, [run, selectedNode]);
+  }, [runData?.id, selectedNode]);
 
-  const nodeEntries: NodeEntry[] = run
-    ? Array.isArray(run.node_results)
-      ? run.node_results as unknown as NodeEntry[]
-      : Object.values(run.node_results as Record<string, NodeEntry> || {})
+  const nodeEntries: NodeEntry[] = runData
+    ? Array.isArray(runData.node_results)
+      ? (runData.node_results as unknown as NodeEntry[])
+      : Object.values(runData.node_results as Record<string, NodeEntry> || {})
     : [];
 
   const activeNode = nodeEntries.find((n) => n.node_id === selectedNode);
-  const finalOutput = run?.final_output as Record<string, unknown> | null;
+  const finalOutput = runData?.final_output || null;
 
   function renderOutput(node: NodeEntry) {
     if (!node.parsed_output && !node.raw_output) {
@@ -79,7 +96,7 @@ export function ExecutionDetailPanel({ runId, onClose }: Props) {
     return <pre className="whitespace-pre-wrap text-xs leading-[1.7] text-sf-text">{JSON.stringify(data, null, 2)}</pre>;
   }
 
-  if (!run) {
+  if (!runData || !runData.id) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: "rgba(0,0,0,0.8)" }}>
         <div className="bg-sf-bg border border-sf-border-standard rounded-card w-full max-w-[1100px] max-h-[85vh] flex items-center justify-center">
@@ -98,11 +115,11 @@ export function ExecutionDetailPanel({ runId, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-sf-border">
           <div className="flex items-center gap-4">
-            <span className="font-mono text-xs text-sf-text-muted">{run.id.slice(0, 8)}…</span>
-            <span className="text-sm text-sf-text font-medium">{run.template_name}</span>
+            <span className="font-mono text-xs text-sf-text-muted">{runData.id.slice(0, 8)}…</span>
+            <span className="text-sm text-sf-text font-medium">{runData.template_name}</span>
           </div>
           <div className="flex items-center gap-3">
-            <StatusBadge status={run.status} />
+            <StatusBadge status={runData.status} />
             <button onClick={onClose} className="p-1 text-sf-text-muted hover:text-sf-text transition-colors">
               <X size={18} />
             </button>
@@ -233,10 +250,10 @@ export function ExecutionDetailPanel({ runId, onClose }: Props) {
             </div>
             <div className="p-4 space-y-3 overflow-y-auto">
               {[
-                ["Run ID", run.id],
-                ["Status", run.status],
-                ["Started", formatDistanceToNow(new Date(run.started_at), { addSuffix: true })],
-                ["Duration", run.total_execution_time_ms != null ? `${(run.total_execution_time_ms / 1000).toFixed(1)}s` : "—"],
+                ["Run ID", runData.id],
+                ["Status", runData.status],
+                ["Started", formatDistanceToNow(new Date(runData.started_at), { addSuffix: true })],
+                ["Duration", runData.total_execution_time_ms != null ? `${(runData.total_execution_time_ms / 1000).toFixed(1)}s` : "—"],
                 ["Nodes", `${nodeEntries.filter(n => n.status.toLowerCase().startsWith("passed")).length}/${nodeEntries.length} passed`],
               ].map(([key, value]) => (
                 <div key={key} className="flex flex-col py-2 border-b border-sf-border text-sm">
@@ -245,18 +262,18 @@ export function ExecutionDetailPanel({ runId, onClose }: Props) {
                 </div>
               ))}
 
-              {run.error_message && (
+              {runData.error_message && (
                 <div className="p-3 bg-sf-red/10 border border-sf-red/30 rounded-btn">
                   <div className="font-mono text-xs text-sf-red mb-1">Error</div>
-                  <div className="text-xs text-sf-text font-mono">{run.error_message}</div>
+                  <div className="text-xs text-sf-text font-mono">{runData.error_message}</div>
                 </div>
               )}
 
-              {run.input_data && Object.keys(run.input_data).length > 0 && (
+              {runData.input_data && Object.keys(runData.input_data).length > 0 && (
                 <>
                   <div className="font-mono text-xs uppercase tracking-[1.2px] text-sf-text-muted mt-2 mb-1">Input Data</div>
                   <div className="bg-sf-surface border border-sf-border-standard rounded-btn p-3">
-                    <pre className="whitespace-pre-wrap text-[11px] text-sf-text font-mono">{JSON.stringify(run.input_data, null, 2)}</pre>
+                    <pre className="whitespace-pre-wrap text-[11px] text-sf-text font-mono">{JSON.stringify(runData.input_data, null, 2)}</pre>
                   </div>
                 </>
               )}

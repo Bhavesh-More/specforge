@@ -23,14 +23,18 @@ async def list_rule_files(
     kg: KnowledgeGraphManager = Depends(get_knowledge_manager),
 ) -> PaginatedListResponse:
     """List all rule files in the knowledge graph."""
+    from pathlib import Path
+
     await kg.initialize()
     stats = await kg.get_graph_stats()
     files = stats.get("isolated_files", []) + [
         f for f in kg._indexer.get_all_files()
     ]
-    items = [
-        RuleFileResponse(name=f, content="", size_bytes=0) for f in sorted(set(files))
-    ]
+    items = []
+    for f in sorted(set(files)):
+        path = kg._rules_dir / (f if f.endswith(".md") else f"{f}.md")
+        content = path.read_text(encoding="utf-8") if path.is_file() else ""
+        items.append(RuleFileResponse(name=f, content=content, size_bytes=len(content)))
     return PaginatedListResponse(items=items, total=len(items))
 
 

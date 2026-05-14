@@ -54,9 +54,10 @@ async def start_execution(
 
     from src.compiler.template_registry import TemplateRegistry
 
-    # Resolve templates directory relative to project root
-    project_root = Path(__file__).parent.parent.parent
+    # Resolve templates directory relative to project root (parent of src/)
+    project_root = Path(__file__).parent.parent.parent.parent
     templates_dir = project_root / "templates"
+    _log.debug("execution_templates_dir", path=str(templates_dir))
     registry = TemplateRegistry(templates_dir=templates_dir)
 
     try:

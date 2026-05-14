@@ -18,7 +18,7 @@ export function TemplatesPage() {
   const [runningTemplateId, setRunningTemplateId] = useState<string | null>(null);
 
   async function openTemplate(tpl: CognitiveTemplate) {
-    const id = (tpl as Record<string, unknown>).templateId as string;
+    const id = (tpl as unknown as Record<string, unknown>).templateId as string;
     if (!id) return;
     try {
       const res = await api.getTemplate(id);
@@ -54,15 +54,17 @@ export function TemplatesPage() {
     }
     setRunningTemplateId(templateId);
     setDetailOpen(false);
-    navigate("/executions");
     startExecution.mutate(
       { templateId, inputData },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
+          console.log("Execution started:", data);
           setRunningTemplateId(null);
           qc.invalidateQueries({ queryKey: ["executions"] });
+          navigate("/executions");
         },
         onError: (err) => {
+          console.error("Execution error:", err);
           setRunningTemplateId(null);
           alert("Run failed: " + (err as Error).message);
         },
@@ -156,7 +158,7 @@ export function TemplatesPage() {
           <tbody>
             {templates.map((tpl, idx) => (
               <tr
-                key={(tpl as Record<string, unknown>).templateId as string || `tpl-${idx}`}
+                key={(tpl as unknown as Record<string, unknown>).templateId as string || `tpl-${idx}`}
                 onClick={() => openTemplate(tpl)}
                 className="border-b border-sf-border cursor-pointer transition-colors duration-100 hover:bg-[rgba(255,255,255,0.03)]"
               >

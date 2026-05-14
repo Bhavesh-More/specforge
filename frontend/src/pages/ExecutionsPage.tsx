@@ -23,12 +23,23 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+type ExecutionRow = {
+  id: string;
+  template_name: string;
+  status: string;
+  started_at: string;
+  total_execution_time_ms: number | null;
+  node_results: unknown[];
+};
+
 export function ExecutionsPage() {
-  const { data: runs, isLoading } = useExecutions();
+  const { data: runsRaw, isLoading } = useExecutions();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
+  const runs = (runsRaw || []) as ExecutionRow[];
+
   if (isLoading) return <Skeleton />;
-  if (!runs?.length) {
+  if (!runs.length) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-4">
         <span className="text-5xl text-sf-border-standard">◆</span>

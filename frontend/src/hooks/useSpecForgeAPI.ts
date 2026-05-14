@@ -2,7 +2,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import * as api from "../api/index";
 import type {
   CognitiveTemplate,
-  ExecutionRun,
   KnowledgeFile,
   HealingEvent,
 } from "../types";
@@ -28,7 +27,7 @@ export function useTemplate(id: string) {
 // ─── Executions ───────────────────────────────────────────────────────────────
 
 export function useExecutions() {
-  return useQuery<ExecutionRun[]>({
+  return useQuery<Array<Record<string, unknown>>>({
     queryKey: ["executions"],
     queryFn: api.listExecutions,
     refetchInterval: 5000,
@@ -36,9 +35,9 @@ export function useExecutions() {
 }
 
 export function useExecution(id: string | null) {
-  return useQuery<ExecutionRun>({
+  return useQuery<Record<string, unknown>>({
     queryKey: ["executions", id],
-    queryFn: () => api.getExecution(id!) as Promise<ExecutionRun>,
+    queryFn: () => api.getExecution(id!),
     enabled: !!id,
     refetchInterval: (q) =>
       q.state.data?.status === "RUNNING" ? 2000 : false,

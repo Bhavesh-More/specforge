@@ -1,10 +1,5 @@
 import axios from "axios";
-import type {
-  CognitiveTemplate,
-  ExecutionRun,
-  KnowledgeFile,
-  HealingEvent,
-} from "../types";
+import type { CognitiveTemplate } from "../types";
 
 const api = axios.create({ baseURL: "/api/v1" });
 
@@ -74,7 +69,8 @@ export async function listExecutions() {
   else if (data?.executions && Array.isArray(data.executions)) items = data.executions;
   else if (data?.items && Array.isArray(data.items)) items = data.items;
   // Backend returns runId, templateId, etc. — normalize to ExecutionRun shape
-  return items.map((r: Record<string, unknown>) => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return items.map((r: any) => ({
     id: r.runId as string,
     template_id: r.templateId as string,
     template_name: r.templateName as string,
@@ -115,7 +111,7 @@ export async function getExecution(id: string): Promise<Record<string, unknown>>
 }
 
 export async function startExecution(payload: { templateId: string; inputData?: Record<string, unknown> }) {
-  const res = await api.post("/executions", { template_id: payload.templateId, input_data: payload.inputData || {} });
+  const res = await api.post("/executions", { templateId: payload.templateId, inputData: payload.inputData || {} });
   return res.data;
 }
 
@@ -156,6 +152,42 @@ export async function listHealingEvents() {
   if (Array.isArray(data)) return data;
   if (data?.events && Array.isArray(data.events)) return data.events;
   return [];
+}
+
+// ─── Dashboard / Stats ───────────────────────────────────────────────────────
+
+export async function getStats() {
+  const res = await api.get("/stats");
+  return res.data as {
+    templates_count: number;
+    executions_count: number;
+    healing_events_count: number;
+    registry_templates?: number;
+  };
+}
+
+export async function getRecentExecutions(limit: number = 5) {
+  const res = await api.get(`/executions/recent?limit=${limit}`);
+  const data = res.data;
+  let items: unknown[] = [];
+  if (Array.isArray(data)) items = data;
+  else if (data?.executions && Array.isArray(data.executions)) items = data.executions;
+  else if (data?.items && Array.isArray(data.items)) items = data.items;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return items.map((r: any) => ({
+    id: r.runId as string,
+    template_id: r.templateId as string,
+    template_name: r.templateName as string,
+    status: r.status as string,
+    input_data: (r.inputData || {}) as Record<string, unknown>,
+    final_output: (r.finalOutput || null) as Record<string, unknown> | null,
+    error_message: (r.errorMessage || null) as string | null,
+    started_at: r.startedAt as string,
+    completed_at: (r.completedAt || null) as string | null,
+    total_execution_time_ms: (r.totalExecutionTimeMs ?? null) as number | null,
+    state_file_path: (r.stateFilePath || null) as string | null,
+    node_results: (r.nodeResults || []) as unknown[],
+  }));
 }
 
 export async function approveHealingEvent(id: string) {

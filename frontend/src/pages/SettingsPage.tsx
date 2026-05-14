@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Settings, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { useOllamaModels, useSelectedModels, useMutateSelectedModels, useOllamaHealth } from "../hooks/useSpecForgeAPI";
 import { useAppStore } from "../stores/appStore";
 
