@@ -113,8 +113,9 @@ def create_app() -> FastAPI:
         )
 
     # Register routers
-    from src.api.routers import executions, healing, knowledge, templates, models
+    from src.api.routers import dashboard, executions, healing, knowledge, templates, models
 
+    app.include_router(dashboard.router, prefix="/api/v1", tags=["dashboard"])
     app.include_router(templates.router, prefix="/api/v1", tags=["templates"])
     app.include_router(executions.router, prefix="/api/v1", tags=["executions"])
     app.include_router(knowledge.router, prefix="/api/v1", tags=["knowledge"])

@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Search, Plus } from "lucide-react";
-import { useKnowledgeFiles } from "../hooks/useSpecForgeAPI";
+import { useKnowledgeFiles, useMutations } from "../hooks/useSpecForgeAPI";
 
 export function KnowledgePage() {
   const { data: files } = useKnowledgeFiles();
+  const { updateFile } = useMutations();
   const [selected, setSelected] = useState<string | null>(null);
+  const [content, setContent] = useState<string>("");
 
   if (!files) {
     return (
@@ -17,6 +19,23 @@ export function KnowledgePage() {
         </div>
       </div>
     );
+  }
+
+  // Load content when file is selected
+  const selectedFile = files.find((f) => f.name === selected);
+  if (selected && selectedFile && content !== selectedFile.content) {
+    setContent(selectedFile.content);
+  }
+
+  async function handleSave() {
+    if (selected && content) {
+      try {
+        await updateFile(selected, content);
+        alert("File saved!");
+      } catch (err) {
+        alert("Save failed: " + (err as Error).message);
+      }
+    }
   }
 
   return (
@@ -33,7 +52,15 @@ export function KnowledgePage() {
               className="w-full bg-sf-bg border border-sf-border-standard rounded-btn pl-8 pr-3 py-1.5 text-[13px] text-sf-text placeholder-sf-text-muted outline-none focus:border-sf-border-strong"
             />
           </div>
-          <button className="p-1.5 text-sf-text-muted hover:text-sf-text transition-colors rounded-btn">
+          <button
+            className="p-1.5 text-sf-text-muted hover:text-sf-text transition-colors rounded-btn"
+            onClick={() => {
+              const name = prompt("New file name:");
+              if (name) {
+                updateFile(name, "// New rule file").catch(() => alert("Failed to create file"));
+              }
+            }}
+          >
             <Plus size={14} />
           </button>
         </div>
@@ -86,13 +113,18 @@ export function KnowledgePage() {
           <>
             <div className="h-[44px] shrink-0 flex items-center justify-between px-4 border-b border-sf-border">
               <span className="font-mono text-[13px] text-sf-text">{selected}</span>
-              <button className="px-4 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)]">
+              <button
+                onClick={handleSave}
+                className="px-4 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)]"
+              >
                 Save
               </button>
             </div>
             <textarea
               className="flex-1 bg-sf-bg p-4 font-mono text-[13px] leading-[1.7] text-sf-text outline-none resize-none"
               spellCheck={false}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
             />
           </>
         ) : (

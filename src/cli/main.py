@@ -618,64 +618,91 @@ app.add_typer(heal_app, name="heal")
 @heal_app.command("events")
 def heal_events():
     """List recent healing events."""
-    from src.api.routers.healing import _events_store
+    import asyncio
+    import json
+    from rich.table import Table
 
-    table = Table(title="Recent Healing Events")
-    table.add_column("Event ID", style="dim")
-    table.add_column("Node ID")
-    table.add_column("Trigger")
-    table.add_column("Applied")
+    async def _list_events() -> None:
+        from src.api.routers.healing import _HEALING_INDEX_KEY, _healing_event_key
+        from src.api.dependencies import get_redis
 
-    events = sorted(
-        _events_store.values(),
-        key=lambda e: e.get("triggered_at", ""),
-        reverse=True,
-    )[:20]
+        redis = await get_redis()
+        event_ids = await redis.smembers(_HEALING_INDEX_KEY)
+        events = []
 
-    for e in events:
-        table.add_row(
-            e["event_id"][:8] + "…",
-            e["node_id"],
-            e["trigger"],
-            "✅" if e["applied"] else "❌",
-        )
+        for eid in event_ids:
+            raw = await redis.get(_healing_event_key(eid))
+            if raw:
+                events.append(json.loads(raw))
 
-    console.print(table)
+        events = sorted(
+            events,
+            key=lambda e: e.get("triggered_at", ""),
+            reverse=True,
+        )[:20]
+
+        table = Table(title="Recent Healing Events")
+        table.add_column("Event ID", style="dim")
+        table.add_column("Node ID")
+        table.add_column("Trigger")
+        table.add_column("Applied")
+
+        for e in events:
+            table.add_row(
+                e["event_id"][:8] + "…",
+                e["node_id"],
+                e["trigger"],
+                "✅" if e["applied"] else "❌",
+            )
+
+        console.print(table)
+
+    _run_async(_list_events())
 
 
 @heal_app.command("show")
 def heal_show(event_id: str):
     """Show full healing event details."""
-    from src.api.routers.healing import _load_event
+    import asyncio
 
-    event = _load_event(event_id)
-    if not event:
-        typer.secho("Healing event not found", fg=typer.colors.RED)
-        raise typer.Exit(1)
+    async def _show_event() -> None:
+        from src.api.routers.healing import _load_event
+        from src.api.dependencies import get_redis
 
-    console.print_json(json.dumps(event, indent=2, default=str))
+        redis = await get_redis()
+        event = await _load_event(event_id, redis)
+        if not event:
+            typer.secho("Healing event not found", fg=typer.colors.RED)
+            raise typer.Exit(1)
+
+        console.print_json(json.dumps(event, indent=2, default=str))
+
+    _run_async(_show_event())
 
 
 @heal_app.command("approve")
 def heal_approve(event_id: str):
     """Approve and apply a healing event's patches."""
+    import asyncio
+    import json
     from src.api.routers.healing import _load_event, _store_event
+    from src.api.dependencies import get_redis
     from src.healing.rule_patcher import RulePatcher
     from datetime import datetime, timezone
     from pathlib import Path
 
-    event = _load_event(event_id)
-    if not event:
-        typer.secho("Healing event not found", fg=typer.colors.RED)
-        raise typer.Exit(1)
-
-    if event["applied"]:
-        typer.secho("Patches already applied", fg=typer.colors.YELLOW)
-        raise typer.Exit(1)
-
-    patcher = RulePatcher(rules_dir=Path("rules"))
-
     async def _approve() -> None:
+        redis = await get_redis()
+        event = await _load_event(event_id, redis)
+        if not event:
+            typer.secho("Healing event not found", fg=typer.colors.RED)
+            raise typer.Exit(1)
+
+        if event["applied"]:
+            typer.secho("Patches already applied", fg=typer.colors.YELLOW)
+            raise typer.Exit(1)
+
+        patcher = RulePatcher(rules_dir=Path("rules"))
         for patch_data in event.get("patches", []):
             await patcher.apply_patch(
                 rule_file_name=patch_data["file_name"],
@@ -685,7 +712,8 @@ def heal_approve(event_id: str):
             )
         event["applied"] = True
         event["applied_at"] = datetime.now(timezone.utc).isoformat()
-        _store_event(event_id, event)
+        event["approved_by"] = "cli"
+        await _store_event(event_id, event, redis)
         typer.secho(f"Event {event_id} approved and patches applied", fg=typer.colors.GREEN)
 
     _run_async(_approve())
@@ -694,16 +722,23 @@ def heal_approve(event_id: str):
 @heal_app.command("reject")
 def heal_reject(event_id: str):
     """Reject a healing event."""
+    import asyncio
     from src.api.routers.healing import _load_event, _store_event
+    from src.api.dependencies import get_redis
 
-    event = _load_event(event_id)
-    if not event:
-        typer.secho("Healing event not found", fg=typer.colors.RED)
-        raise typer.Exit(1)
+    async def _reject() -> None:
+        redis = await get_redis()
+        event = await _load_event(event_id, redis)
+        if not event:
+            typer.secho("Healing event not found", fg=typer.colors.RED)
+            raise typer.Exit(1)
 
-    event["applied"] = False
-    _store_event(event_id, event)
-    typer.secho(f"Event {event_id} rejected", fg=typer.colors.YELLOW)
+        event["applied"] = False
+        event["approved_by"] = "cli"
+        await _store_event(event_id, event, redis)
+        typer.secho(f"Event {event_id} rejected", fg=typer.colors.YELLOW)
+
+    _run_async(_reject())
 
 
 # ─── Doctor group ──────────────────────────────────────────────────────────────

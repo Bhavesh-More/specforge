@@ -5,10 +5,12 @@ import {
   BookOpen,
   HeartCrack,
   Settings,
+  Home,
 } from "lucide-react";
 import { useAppStore } from "../stores/appStore";
 
 const NAV_ITEMS = [
+  { to: "/", icon: Home, label: "Dashboard" },
   { to: "/templates", icon: LayoutTemplate, label: "Templates" },
   { to: "/executions", icon: PlayCircle, label: "Executions" },
   { to: "/knowledge", icon: BookOpen, label: "Knowledge" },
@@ -42,25 +44,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Nav */}
         <nav className="flex-1 pt-2">
-          {NAV_ITEMS.map(({ to, icon: Icon, label }) => {
-            const active = location.pathname.startsWith(to);
-            return (
-              <Link
-                key={to}
-                to={to}
-                className={`
-                  flex items-center gap-3 px-4 py-[10px] text-sm font-medium transition-colors duration-150
-                  ${active
-                    ? "text-sf-text border-l-2 border-sf-green bg-[rgba(62,207,142,0.05)]"
-                    : "text-sf-text-muted hover:text-sf-text"
-                  }
-                `}
-              >
-                <Icon size={16} />
-                {label}
-              </Link>
-            );
-          })}
+          {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
+            <Link
+              key={to}
+              to={to}
+              className={`
+                flex items-center gap-3 px-4 py-[10px] text-sm font-medium transition-colors duration-150
+                ${location.pathname === to || (to === "/" && location.pathname === "/")
+                  ? "text-sf-text border-l-2 border-sf-green bg-[rgba(62,207,142,0.05)]"
+                  : "text-sf-text-muted hover:text-sf-text"
+                }
+              `}
+            >
+              <Icon size={16} />
+              {label}
+            </Link>
+          ))}
         </nav>
 
         {/* Ollama status */}

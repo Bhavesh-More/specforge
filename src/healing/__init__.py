@@ -10,6 +10,17 @@ from src.healing.teacher_client import TeacherClient
 from src.healing.rule_patcher import RulePatcher
 from src.models.cognitive_template import DAGNode
 from src.models.healing import HealingEvent, HealingTrigger
+from src.cache.redis_client import RedisClient
+
+_log = get_logger(__name__)
+
+
+# Redis key for healing events index
+HEALING_INDEX_KEY = "specforge:healing_events:index"
+
+
+def _healing_event_key(event_id: str) -> str:
+    return f"specforge:healing_event:{event_id}"
 
 _log = get_logger(__name__)
 
@@ -151,4 +162,17 @@ class SelfHealingOrchestrator:
             requires_approval=self._require_approval,
         )
 
+        # Store event in Redis for dashboard stats
+        await _store_event_in_redis(event)
+
         return event
+
+
+async def _store_event_in_redis(event: HealingEvent) -> None:
+    """Store healing event in Redis for dashboard stats."""
+    try:
+        redis = RedisClient.from_url("redis://localhost:6379")
+        await redis.set(_healing_event_key(event.event_id), event.model_dump_json())
+        await redis.sadd(HEALING_INDEX_KEY, event.event_id)
+    except Exception as e:
+        _log.warning("redis_store_healing_failed", error=str(e))
