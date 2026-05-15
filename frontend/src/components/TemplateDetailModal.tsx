@@ -32,7 +32,11 @@ export function TemplateDetailModal({ template, onClose, onRun, isRunning }: Pro
 
   function handleRunClick() {
     if (showInput) {
-      onRun?.(template.template_id, { description: inputValue });
+      onRun?.(template.template_id, {
+        description: inputValue,
+        raw_input: inputValue,
+        input: inputValue,
+      });
       setShowInput(false);
       setInputValue("");
     } else {
@@ -222,14 +226,13 @@ export function TemplateDetailModal({ template, onClose, onRun, isRunning }: Pro
         <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-sf-border">
           {showInput ? (
             <>
-              <input
-                type="text"
+              <textarea
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
-                placeholder="Describe the error to process..."
-                className="flex-1 bg-sf-surface border border-sf-border-standard rounded-btn px-3 py-[6px] text-sm text-sf-text placeholder:text-sf-text-muted font-mono"
+                placeholder="Paste raw incident log/input here..."
+                className="flex-1 min-h-[88px] max-h-[180px] bg-sf-surface border border-sf-border-standard rounded-btn px-3 py-[6px] text-sm text-sf-text placeholder:text-sf-text-muted font-mono resize-y"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") handleRunClick();
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") handleRunClick();
                   if (e.key === "Escape") handleCancelRun();
                 }}
                 autoFocus

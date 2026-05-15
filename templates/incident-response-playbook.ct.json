@@ -1,0 +1,241 @@
+{
+  "template_id": "incident-response-playbook-20260515",
+  "name": "Incident Response Playbook Generator",
+  "description": "Parse raw alert/log input, classify threat severity, concurrently suggest containment actions and identify affected systems, validate the response plan, and produce a final professional incident report.",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "nodes": [
+    {
+      "node_id": "alert_parser",
+      "name": "Alert / Log Parser",
+      "description": "Parse raw alert or log input to extract key forensic details: IP addresses, usernames, timestamps, and actions taken.",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a senior SOC analyst specializing in log forensics. Extract all structured incident details from raw alert or log text with precision. Return only what is explicitly present; use 'unknown' for missing fields.",
+        "user_template": "Parse the following raw alert or log input and extract all key details:\n\n{raw_input}\n\nReturn a structured breakdown covering: source IP(s), destination IP(s), username(s), timestamp(s), action(s) performed, affected resource(s), alert rule or signature triggered, and any error or status codes present.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "source_ips",
+            "destination_ips",
+            "usernames",
+            "timestamps",
+            "actions",
+            "affected_resources",
+            "alert_rule",
+            "status_codes",
+            "raw_summary"
+          ],
+          "properties": {
+            "source_ips": {"type": "string"},
+            "destination_ips": {"type": "string"},
+            "usernames": {"type": "string"},
+            "timestamps": {"type": "string"},
+            "actions": {"type": "string"},
+            "affected_resources": {"type": "string"},
+            "alert_rule": {"type": "string"},
+            "status_codes": {"type": "string"},
+            "raw_summary": {"type": "string"}
+          }
+        },
+        "required_variables": ["raw_input"],
+        "max_tokens": 800,
+        "temperature": 0.2
+      },
+      "depends_on": [],
+      "can_run_parallel": true,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "alert_parser"
+    },
+    {
+      "node_id": "severity_classifier",
+      "name": "Threat Severity Classifier",
+      "description": "Classify the threat severity as critical, high, medium, or low based on the parsed alert details using established threat-rating frameworks.",
+      "node_type": "adversarial",
+      "focus_prompt": {
+        "system_prompt": "You are a cybersecurity threat intelligence analyst trained in CVSS, NIST SP 800-61, and MITRE ATT&CK. Classify incident severity with rigorous reasoning. Be conservative — when in doubt, escalate the severity rating.",
+        "user_template": "Based on the following parsed incident details, classify the threat severity as CRITICAL, HIGH, MEDIUM, or LOW.\n\nParsed Details:\n- Source IPs: {alert_parser.source_ips}\n- Destination IPs: {alert_parser.destination_ips}\n- Users: {alert_parser.usernames}\n- Timestamps: {alert_parser.timestamps}\n- Actions: {alert_parser.actions}\n- Affected Resources: {alert_parser.affected_resources}\n- Alert Rule: {alert_parser.alert_rule}\n- Status Codes: {alert_parser.status_codes}\n- Summary: {alert_parser.raw_summary}\n\nProvide: severity level, CVSS-like score (0.0–10.0), confidence percentage, primary threat category (e.g. lateral movement, data exfiltration, credential abuse), and a 2–3 sentence justification referencing specific parsed fields.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "severity_level",
+            "cvss_score",
+            "confidence_pct",
+            "threat_category",
+            "justification"
+          ],
+          "properties": {
+            "severity_level": {"type": "string"},
+            "cvss_score": {"type": "number"},
+            "confidence_pct": {"type": "number"},
+            "threat_category": {"type": "string"},
+            "justification": {"type": "string"}
+          }
+        },
+        "required_variables": ["alert_parser"],
+        "max_tokens": 500,
+        "temperature": 0.3
+      },
+      "depends_on": ["alert_parser"],
+      "can_run_parallel": false,
+      "max_retries": 1,
+      "symbolic_tool": null,
+      "output_key": "severity_classifier"
+    },
+    {
+      "node_id": "containment_advisor",
+      "name": "Containment Action Advisor",
+      "description": "Suggest prioritized containment and remediation actions based on the severity classification and parsed incident details. Runs in parallel with affected_systems_identifier.",
+      "node_type": "lookahead",
+      "focus_prompt": {
+        "system_prompt": "You are an incident response engineer with expertise in containment, eradication, and recovery (NIST IR lifecycle). Produce actionable, prioritized containment steps tailored to the specific incident. Include immediate (0–1 hr), short-term (1–24 hr), and long-term (24 hr+) actions.",
+        "user_template": "Suggest containment and remediation actions for the following incident:\n\nSeverity: {severity_classifier.severity_level} (CVSS: {severity_classifier.cvss_score})\nThreat Category: {severity_classifier.threat_category}\nActions Observed: {alert_parser.actions}\nAffected Resources: {alert_parser.affected_resources}\nUsers Involved: {alert_parser.usernames}\nSource IPs: {alert_parser.source_ips}\n\nStructure your response as:\n1. Immediate actions (block/isolate/disable)\n2. Short-term actions (patch/rotate credentials/scan)\n3. Long-term actions (policy changes/monitoring improvements)\n\nFor each action specify: action description, responsible team, and expected outcome.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "immediate_actions",
+            "short_term_actions",
+            "long_term_actions",
+            "action_count",
+            "priority_summary"
+          ],
+          "properties": {
+            "immediate_actions": {"type": "string"},
+            "short_term_actions": {"type": "string"},
+            "long_term_actions": {"type": "string"},
+            "action_count": {"type": "number"},
+            "priority_summary": {"type": "string"}
+          }
+        },
+        "required_variables": ["alert_parser", "severity_classifier"],
+        "max_tokens": 900,
+        "temperature": 0.4
+      },
+      "depends_on": ["alert_parser", "severity_classifier"],
+      "can_run_parallel": true,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "containment_advisor"
+    },
+    {
+      "node_id": "systems_identifier",
+      "name": "Affected Systems Identifier",
+      "description": "Identify and map all potentially affected systems, services, and blast radius of the incident. Runs in parallel with containment_advisor.",
+      "node_type": "parallel",
+      "focus_prompt": {
+        "system_prompt": "You are a cloud and network infrastructure analyst. Given incident details, map the full blast radius — which systems, services, users, and data assets are confirmed affected or at risk. Use the parsed indicators to reason about lateral movement paths and downstream exposure.",
+        "user_template": "Identify all affected and potentially impacted systems for this incident:\n\nSource IPs: {alert_parser.source_ips}\nDestination IPs: {alert_parser.destination_ips}\nAffected Resources: {alert_parser.affected_resources}\nActions Observed: {alert_parser.actions}\nThreat Category: {severity_classifier.threat_category}\nTimestamps: {alert_parser.timestamps}\n\nProvide:\n1. Confirmed affected systems (directly observed in logs)\n2. Potentially compromised systems (lateral movement risk)\n3. Data assets at risk (PII, credentials, IP, financial)\n4. External exposure assessment (internet-facing components)\n5. Estimated blast radius summary (scope: isolated / departmental / organization-wide)",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "confirmed_systems",
+            "at_risk_systems",
+            "data_assets_at_risk",
+            "external_exposure",
+            "blast_radius"
+          ],
+          "properties": {
+            "confirmed_systems": {"type": "string"},
+            "at_risk_systems": {"type": "string"},
+            "data_assets_at_risk": {"type": "string"},
+            "external_exposure": {"type": "string"},
+            "blast_radius": {"type": "string"}
+          }
+        },
+        "required_variables": ["alert_parser", "severity_classifier"],
+        "max_tokens": 800,
+        "temperature": 0.3
+      },
+      "depends_on": ["alert_parser", "severity_classifier"],
+      "can_run_parallel": true,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "systems_identifier"
+    },
+    {
+      "node_id": "action_validator",
+      "name": "Response Plan Validator",
+      "description": "Validate the suggested containment actions for completeness, logical consistency, coverage gaps, and alignment with identified affected systems.",
+      "node_type": "adversarial",
+      "focus_prompt": {
+        "system_prompt": "You are a senior IR quality assurance reviewer and red team consultant. Critically evaluate the proposed incident response plan for gaps, contradictions, missing ownership, unaddressed systems, and logical inconsistencies. Be thorough and adversarial — surface every weakness.",
+        "user_template": "Validate the following incident response plan for completeness and consistency:\n\n--- CONTAINMENT ACTIONS ---\nImmediate: {containment_advisor.immediate_actions}\nShort-term: {containment_advisor.short_term_actions}\nLong-term: {containment_advisor.long_term_actions}\n\n--- AFFECTED SYSTEMS ---\nConfirmed: {systems_identifier.confirmed_systems}\nAt Risk: {systems_identifier.at_risk_systems}\nData at Risk: {systems_identifier.data_assets_at_risk}\nBlast Radius: {systems_identifier.blast_radius}\n\n--- SEVERITY CONTEXT ---\nLevel: {severity_classifier.severity_level} | Category: {severity_classifier.threat_category}\n\nEvaluate:\n1. Are all confirmed and at-risk systems addressed by containment actions?\n2. Are there contradictions or sequencing issues in the actions?\n3. Are data assets at risk covered?\n4. Is ownership/team assignment clear for all actions?\n5. Are there regulatory/compliance notification requirements missing (GDPR, HIPAA, PCI-DSS)?\n6. Overall plan quality: APPROVED / APPROVED WITH CHANGES / NEEDS REVISION",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "coverage_gaps",
+            "contradictions",
+            "compliance_gaps",
+            "ownership_issues",
+            "validation_verdict",
+            "recommendations"
+          ],
+          "properties": {
+            "coverage_gaps": {"type": "string"},
+            "contradictions": {"type": "string"},
+            "compliance_gaps": {"type": "string"},
+            "ownership_issues": {"type": "string"},
+            "validation_verdict": {"type": "string"},
+            "recommendations": {"type": "string"}
+          }
+        },
+        "required_variables": ["containment_advisor", "systems_identifier", "severity_classifier"],
+        "max_tokens": 800,
+        "temperature": 0.3
+      },
+      "depends_on": ["containment_advisor", "systems_identifier"],
+      "can_run_parallel": false,
+      "max_retries": 1,
+      "symbolic_tool": null,
+      "output_key": "action_validator"
+    },
+    {
+      "node_id": "report_writer",
+      "name": "Incident Report Writer",
+      "description": "Synthesize all upstream outputs into a final, professional incident report suitable for CISO, legal, and compliance stakeholders.",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a senior cybersecurity incident response manager writing for a CISO and legal/compliance audience. Produce a formal, structured incident report that is precise, professional, and audit-ready. Use clear section headers and avoid technical jargon where executive summary sections are involved.",
+        "user_template": "Write a complete professional Incident Response Report using all of the following inputs. The final report must be audit-ready, concise in the executive layer, and detailed in the technical layer. Use professional markdown headings, short paragraphs, and bullet lists where helpful. Do not omit any section.\n\n=== REPORT FORMAT ===\n# Incident Response Report\n\n## 1. Executive Summary\n- Include severity, blast radius, business impact, and current status.\n- Keep this section executive-friendly and under 200 words.\n\n## 2. Incident Timeline\n- Present the key events in chronological order with timestamps where available.\n\n## 3. Technical Analysis\n- Summarize indicators, threat category, observed actions, and notable anomalies.\n\n## 4. Affected Systems & Impact Assessment\n- Clearly list confirmed systems, at-risk systems, data at risk, and exposure scope.\n\n## 5. Response Actions Taken / Recommended\n- Separate immediate, short-term, and long-term actions.\n- Include owners or responsible teams when possible.\n\n## 6. Validation & Quality Assurance Notes\n- State the validation verdict, coverage gaps, contradictions, and open issues.\n\n## 7. Compliance & Regulatory Considerations\n- Call out GDPR, HIPAA, PCI-DSS, or other notification obligations if relevant.\n\n## 8. Lessons Learned & Preventive Recommendations\n- Provide concrete preventive measures and monitoring improvements.\n\n## 9. Appendix: Raw Indicators of Compromise (IOCs)\n- List source IPs, destination IPs, usernames, timestamps, alert rules, and status codes.\n\n=== PARSED ALERT DETAILS ===\nSource IPs: {alert_parser.source_ips}\nDestination IPs: {alert_parser.destination_ips}\nUsers: {alert_parser.usernames}\nTimestamps: {alert_parser.timestamps}\nActions: {alert_parser.actions}\nAlert Rule: {alert_parser.alert_rule}\nSummary: {alert_parser.raw_summary}\n\n=== THREAT CLASSIFICATION ===\nSeverity: {severity_classifier.severity_level} (CVSS: {severity_classifier.cvss_score})\nCategory: {severity_classifier.threat_category}\nJustification: {severity_classifier.justification}\n\n=== AFFECTED SYSTEMS ===\nConfirmed: {systems_identifier.confirmed_systems}\nAt Risk: {systems_identifier.at_risk_systems}\nData at Risk: {systems_identifier.data_assets_at_risk}\nBlast Radius: {systems_identifier.blast_radius}\n\n=== RESPONSE PLAN ===\nImmediate: {containment_advisor.immediate_actions}\nShort-term: {containment_advisor.short_term_actions}\nLong-term: {containment_advisor.long_term_actions}\n\n=== VALIDATION ===\nVerdict: {action_validator.validation_verdict}\nGaps: {action_validator.coverage_gaps}\nRecommendations: {action_validator.recommendations}\nCompliance Notes: {action_validator.compliance_gaps}",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "report_title",
+            "report_date",
+            "severity_label",
+            "executive_summary",
+            "full_report",
+            "ioc_list"
+          ],
+          "properties": {
+            "report_title": {"type": "string"},
+            "report_date": {"type": "string"},
+            "severity_label": {"type": "string"},
+            "executive_summary": {"type": "string"},
+            "full_report": {"type": "string"},
+            "ioc_list": {"type": "string"}
+          }
+        },
+        "required_variables": [
+          "alert_parser",
+          "severity_classifier",
+          "systems_identifier",
+          "containment_advisor",
+          "action_validator"
+        ],
+        "max_tokens": 1000,
+        "temperature": 0.6
+      },
+      "depends_on": ["action_validator"],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "report_writer"
+    }
+  ],
+  "created_at": "2026-05-15T00:00:00Z",
+  "updated_at": "2026-05-15T00:00:00Z",
+  "tags": ["generated", "security", "incident-response", "soc", "threat-intelligence"],
+  "author": "claude-skill"
+}

@@ -97,13 +97,14 @@ class SchemaValidator:
                 validation_time_ms=(time.perf_counter() - start) * 1000,
             )
 
-        is_valid, schema_errors = self.validate_schema(parsed, json_schema)
+        hydrated = _hydrate_required_defaults(parsed, json_schema)
+        is_valid, schema_errors = self.validate_schema(hydrated, json_schema)
 
         return ValidationResult(
             is_valid=is_valid,
             errors=parse_errors + schema_errors,
             raw_output=raw_output,
-            parsed_output=parsed if is_valid else None,
+            parsed_output=hydrated if is_valid else None,
             validation_time_ms=(time.perf_counter() - start) * 1000,
         )
 
@@ -330,3 +331,51 @@ def _simplify_jsonschema_error(exc: jsonschema.ValidationError) -> str:
             return f"At {path}: expected {exc.validator_value}, got {type(val).__name__}"
         return f"At {path}: {exc.message}"
     return exc.message
+
+
+def _default_for_schema_type(schema: dict[str, Any]) -> Any:
+    """Return a conservative default value for a schema property type."""
+    type_name = schema.get("type")
+    if isinstance(type_name, list):
+        type_name = next((t for t in type_name if t != "null"), type_name[0] if type_name else None)
+
+    if type_name == "string":
+        return "unknown"
+    if type_name == "number":
+        return 0.0
+    if type_name == "integer":
+        return 0
+    if type_name == "boolean":
+        return False
+    if type_name == "array":
+        return []
+    if type_name == "object":
+        return {}
+    return None
+
+
+def _hydrate_required_defaults(
+    parsed_output: dict[str, Any],
+    json_schema: dict[str, Any],
+) -> dict[str, Any]:
+    """Fill missing required top-level properties with type-safe defaults.
+
+    This makes execution resilient when the model omits one or two fields that can
+    safely default (e.g. string fields become "unknown").
+    """
+    if not json_schema or not isinstance(parsed_output, dict):
+        return parsed_output
+
+    required = json_schema.get("required")
+    properties = json_schema.get("properties")
+    if not isinstance(required, list) or not isinstance(properties, dict):
+        return parsed_output
+
+    hydrated = dict(parsed_output)
+    for key in required:
+        if key not in hydrated:
+            prop_schema = properties.get(key, {})
+            if isinstance(prop_schema, dict):
+                hydrated[key] = _default_for_schema_type(prop_schema)
+
+    return hydrated
