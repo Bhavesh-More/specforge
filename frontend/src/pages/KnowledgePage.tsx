@@ -4,7 +4,12 @@ import { useKnowledgeFiles, useMutations } from "../hooks/useSpecForgeAPI";
 
 export function KnowledgePage() {
   const { data: files } = useKnowledgeFiles();
-  const { updateFile } = useMutations();
+
+  const {
+    updateKnowledgeFile,
+    createKnowledgeFile,
+  } = useMutations();
+
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
 
@@ -14,8 +19,11 @@ export function KnowledgePage() {
         <div className="w-[280px] shrink-0 border-r border-sf-border bg-sf-bg-deep p-4">
           <Skeleton />
         </div>
+
         <div className="flex-1 flex items-center justify-center">
-          <span className="text-sm text-sf-text-muted">← Select a rule file</span>
+          <span className="text-sm text-sf-text-muted">
+            ← Select a rule file
+          </span>
         </div>
       </div>
     );
@@ -23,18 +31,40 @@ export function KnowledgePage() {
 
   // Load content when file is selected
   const selectedFile = files.find((f) => f.name === selected);
+
   if (selected && selectedFile && content !== selectedFile.content) {
     setContent(selectedFile.content);
   }
 
   async function handleSave() {
-    if (selected && content) {
-      try {
-        await updateFile(selected, content);
-        alert("File saved!");
-      } catch (err) {
-        alert("Save failed: " + (err as Error).message);
-      }
+    if (!selected) return;
+
+    try {
+      await updateKnowledgeFile.mutateAsync({
+        name: selected,
+        content,
+      });
+
+      alert("File saved!");
+    } catch (err) {
+      alert("Save failed: " + (err as Error).message);
+    }
+  }
+
+  async function handleCreateFile() {
+    const name = prompt("New file name:");
+
+    if (!name) return;
+
+    try {
+      await createKnowledgeFile.mutateAsync({
+        name,
+        content: "// New rule file",
+      });
+
+      alert("File created!");
+    } catch (err) {
+      alert("Failed to create file: " + (err as Error).message);
     }
   }
 
@@ -45,21 +75,21 @@ export function KnowledgePage() {
         {/* Search bar */}
         <div className="px-3 py-[10px] border-b border-sf-border flex items-center gap-2">
           <div className="flex-1 relative">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sf-text-muted" />
+            <Search
+              size={13}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-sf-text-muted"
+            />
+
             <input
               type="text"
               placeholder="Search files…"
               className="w-full bg-sf-bg border border-sf-border-standard rounded-btn pl-8 pr-3 py-1.5 text-[13px] text-sf-text placeholder-sf-text-muted outline-none focus:border-sf-border-strong"
             />
           </div>
+
           <button
             className="p-1.5 text-sf-text-muted hover:text-sf-text transition-colors rounded-btn"
-            onClick={() => {
-              const name = prompt("New file name:");
-              if (name) {
-                updateFile(name, "// New rule file").catch(() => alert("Failed to create file"));
-              }
-            }}
+            onClick={handleCreateFile}
           >
             <Plus size={14} />
           </button>
@@ -77,7 +107,10 @@ export function KnowledgePage() {
                   : "text-sf-text-secondary"
               }`}
             >
-              <div className="font-mono text-[13px]">{file.name}</div>
+              <div className="font-mono text-[13px]">
+                {file.name}
+              </div>
+
               <div className="font-mono text-[11px] text-sf-text-muted mt-0.5">
                 ↗ {file.linked_files.length} links
               </div>
@@ -91,15 +124,24 @@ export function KnowledgePage() {
             <div className="font-mono text-[10px] uppercase tracking-[1.2px] text-sf-text-muted mb-2">
               Graph Stats
             </div>
+
             <div className="space-y-1 text-xs">
               <div className="flex justify-between">
                 <span className="text-sf-text-muted">Files</span>
-                <span className="text-sf-text">{files.length}</span>
+
+                <span className="text-sf-text">
+                  {files.length}
+                </span>
               </div>
+
               <div className="flex justify-between">
                 <span className="text-sf-text-muted">Links</span>
+
                 <span className="text-sf-text">
-                  {files.reduce((sum, f) => sum + f.linked_files.length, 0)}
+                  {files.reduce(
+                    (sum, f) => sum + f.linked_files.length,
+                    0
+                  )}
                 </span>
               </div>
             </div>
@@ -112,7 +154,10 @@ export function KnowledgePage() {
         {selected ? (
           <>
             <div className="h-[44px] shrink-0 flex items-center justify-between px-4 border-b border-sf-border">
-              <span className="font-mono text-[13px] text-sf-text">{selected}</span>
+              <span className="font-mono text-[13px] text-sf-text">
+                {selected}
+              </span>
+
               <button
                 onClick={handleSave}
                 className="px-4 py-[6px] rounded-pill text-sm font-medium text-sf-green bg-transparent border border-[rgba(62,207,142,0.3)]"
@@ -120,6 +165,7 @@ export function KnowledgePage() {
                 Save
               </button>
             </div>
+
             <textarea
               className="flex-1 bg-sf-bg p-4 font-mono text-[13px] leading-[1.7] text-sf-text outline-none resize-none"
               spellCheck={false}
@@ -129,7 +175,9 @@ export function KnowledgePage() {
           </>
         ) : (
           <div className="flex-1 flex items-center justify-center">
-            <span className="text-sm text-sf-text-muted">← Select a rule file</span>
+            <span className="text-sm text-sf-text-muted">
+              ← Select a rule file
+            </span>
           </div>
         )}
       </div>
@@ -141,7 +189,10 @@ function Skeleton() {
   return (
     <div className="space-y-3 p-3">
       {[...Array(6)].map((_, i) => (
-        <div key={i} className="h-10 rounded bg-sf-surface animate-pulse" />
+        <div
+          key={i}
+          className="h-10 rounded bg-sf-surface animate-pulse"
+        />
       ))}
     </div>
   );
