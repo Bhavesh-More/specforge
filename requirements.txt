@@ -12,6 +12,7 @@ networkx>=3.3.0
 jsonschema>=4.23.0
 typer[all]>=0.14.0
 httpx>=0.28.0
+numpy>=2.0.0
 aiofiles>=24.0.0
 python-dotenv>=1.0.0
 psycopg2-binary>=2.9.0
