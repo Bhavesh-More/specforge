@@ -7,6 +7,7 @@ from src.core.exceptions import NodeExecutionError, OllamaConnectionError
 from src.core.logging import get_logger
 from src.executor.context_surgeon import ContextSurgeon
 from src.models.cognitive_template import DAGNode
+from specforge.sampling import SCSConfig, SCSExecutor
 
 _log = get_logger(__name__)
 
@@ -187,6 +188,49 @@ class AtomicExecutor:
             )
 
         start_ms = time.perf_counter()
+
+        scs_executor: SCSExecutor | None = None
+        scs_result = None
+
+        # SCS is only safe for free-form text generation. Structured JSON nodes
+        # must continue through the existing validated Ollama path so we don't
+        # bypass schema enforcement or introduce invalid control characters.
+        should_use_scs = not bool(node.focus_prompt.output_schema)
+
+        if should_use_scs:
+            try:
+                scs_executor = SCSExecutor(
+                    SCSConfig(ollama_base_url=self._client.base_url)
+                )
+                scs_result = await scs_executor.generate(
+                    model=self._client.model,
+                    prompt=f"{system_prompt}\n\n{user_message}",
+                    node_type=getattr(node.node_type, "value", str(node.node_type)),
+                    max_tokens=node.focus_prompt.max_tokens,
+                    temperature=node.focus_prompt.temperature,
+                )
+            except Exception as exc:
+                _log.warning(
+                    "scs_fallback",
+                    node_id=node.node_id,
+                    error=str(exc),
+                )
+            finally:
+                if scs_executor is not None:
+                    await scs_executor.close()
+
+        if scs_result is not None and not scs_result.should_escalate:
+            raw_output = scs_result.text
+            elapsed_ms = (time.perf_counter() - start_ms) * 1000
+
+            _log.info(
+                "node_executed",
+                node_id=node.node_id,
+                attempt_number=attempt_number,
+                execution_time_ms=round(elapsed_ms, 2),
+            )
+
+            return raw_output, rule_files
 
         try:
             raw_output = await self._client.generate(
