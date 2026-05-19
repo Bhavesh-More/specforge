@@ -8,6 +8,10 @@ from src.core.logging import get_logger
 from src.executor.context_surgeon import ContextSurgeon
 from src.models.cognitive_template import DAGNode
 from specforge.sampling import SCSConfig, SCSExecutor
+from specforge.cognition import (
+    ReasoningPipeline, ReasoningPipelineConfig, 
+    SPAExecutor, SPAConfig
+)
 
 _log = get_logger(__name__)
 
@@ -188,6 +192,78 @@ class AtomicExecutor:
             )
 
         start_ms = time.perf_counter()
+
+        # ─── DEEP REASONING PIPELINE (Person 1: SPA Layer) ──────────────────
+        # Check for deep reasoning by node_id suffix (e.g., "severity_classification_deep_reason")
+        # Nodes with this suffix use SPA + Budget Forcing + Socratic method
+        if node.node_id.endswith("_deep_reason"):
+            try:
+                _log.info("deep_reason_node_detected", node_id=node.node_id)
+                pipeline = ReasoningPipeline(ReasoningPipelineConfig(
+                    model=self._client.model,
+                    ollama_base_url=self._client.base_url,
+                ))
+                result = await pipeline.execute(user_message, system_prompt=system_prompt)
+                await pipeline.close()
+                
+                # Check if final_answer is empty; if so, fall through to SPA/Ollama
+                if result.final_answer and result.final_answer.strip():
+                    elapsed_ms = (time.perf_counter() - start_ms) * 1000
+                    _log.info(
+                        "deep_reason_completed",
+                        node_id=node.node_id,
+                        pipeline_used=result.pipeline_used,
+                        execution_time_ms=round(elapsed_ms, 2),
+                    )
+                    return result.final_answer, rule_files
+                else:
+                    _log.warning(
+                        "deep_reason_empty_output",
+                        node_id=node.node_id,
+                        reasoning_trace_len=len(result.reasoning_trace or ""),
+                    )
+                    # Fall through to SPA/Ollama
+            except Exception as exc:
+                _log.warning(
+                    "deep_reason_fallback",
+                    node_id=node.node_id,
+                    error=str(exc),
+                )
+                # Fall through to normal execution
+
+        # ─── SEMANTIC PRESSURE ANNEALING (Person 1: SPA Layer) ──────────────
+        # Check for pressure_annealing config in bento_config (Pydantic model)
+        bento_config = getattr(node, 'bento_config', None)
+        if bento_config and hasattr(bento_config, 'pressure_annealing') and bento_config.pressure_annealing:
+            try:
+                _log.info("pressure_annealing_enabled", node_id=node.node_id)
+                spa_cfg_dict = bento_config.pressure_annealing
+                spa_cfg = SPAConfig(**spa_cfg_dict)
+                spa_executor = SPAExecutor(self._client.base_url)
+                result = await spa_executor.generate(
+                    model=self._client.model,
+                    prompt=user_message,
+                    spa_config=spa_cfg,
+                    system_prompt=system_prompt,
+                    max_tokens=node.focus_prompt.max_tokens if hasattr(node, 'focus_prompt') else 500,
+                    temperature=node.focus_prompt.temperature if hasattr(node, 'focus_prompt') else self._client.temperature,
+                )
+                await spa_executor.close()
+                elapsed_ms = (time.perf_counter() - start_ms) * 1000
+                _log.info(
+                    "spa_completed",
+                    node_id=node.node_id,
+                    injections=result.injection_count,
+                    execution_time_ms=round(elapsed_ms, 2),
+                )
+                return result.text, rule_files
+            except Exception as exc:
+                _log.warning(
+                    "spa_fallback",
+                    node_id=node.node_id,
+                    error=str(exc),
+                )
+                # Fall through to normal execution
 
         scs_executor: SCSExecutor | None = None
         scs_result = None

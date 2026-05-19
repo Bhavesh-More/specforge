@@ -75,6 +75,7 @@ class BentoBoxConfig(BaseModel):
         follow_links: Whether to follow [[wiki-links]] when assembling context.
         max_depth: Max wiki-link traversal depth (default 2).
         token_budget: Max tokens for assembled context (default 1500).
+        pressure_annealing: Optional SPA (Self-Paced Annealing) config dict with warn_threshold, inject_threshold, etc.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -83,6 +84,7 @@ class BentoBoxConfig(BaseModel):
     follow_links: bool = True
     max_depth: int = Field(default=2, ge=0, le=10)
     token_budget: int = Field(default=1500, ge=128, le=128000)
+    pressure_annealing: dict[str, Any] | None = None
 
 
 class DAGNode(BaseModel):
@@ -151,6 +153,7 @@ class CognitiveTemplate(BaseModel):
         updated_at: UTC timestamp of last modification.
         tags: Arbitrary string tags for filtering/searching.
         author: Author identifier (default 'anonymous').
+        result_weaver: Optional result template for final output formatting.
     """
 
     model_config = ConfigDict(
@@ -169,6 +172,7 @@ class CognitiveTemplate(BaseModel):
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tags: list[str] = Field(default_factory=list)
     author: str = "anonymous"
+    result_weaver: dict[str, Any] | None = None
 
     @field_validator("version")
     @classmethod

@@ -1,0 +1,3 @@
+{
+  "description": "When I try to export a large report (>10MB) from the admin dashboard, the browser hangs for 30 seconds and then shows a 504 timeout error. The report never gets exported. Smaller reports (<5MB) work fine. I'm using Chrome on macOS, and the API logs show no error — just silence. The memory usage on the API server spikes to 95% during this time.\n\nI noticed this started happening after we deployed version 2.4.0 last Tuesday. Before that, large exports worked fine. My colleagues are having the same issue.\n\nError in browser console:\nUncaught TypeError: Failed to fetch\n\nServer logs show nothing — not even a warning.\n\nI need this fixed ASAP because our customers can't run end-of-month reporting."
+}

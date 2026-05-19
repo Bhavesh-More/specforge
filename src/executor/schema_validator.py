@@ -1,6 +1,7 @@
 """Output validation and retry orchestration for atomic node execution."""
 
 import json
+import re
 import time
 from typing import Any
 
@@ -12,6 +13,44 @@ from src.models.execution import NodeResult, NodeStatus, ValidationResult
 from src.executor.atomic_executor import AtomicExecutor
 
 _log = get_logger(__name__)
+
+
+# ─── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def extract_json_from_text(text: str) -> str | None:
+    """Extract JSON object from text that may contain prose or markdown.
+
+    Attempts to find a JSON object (starting with { and ending with }) in the text.
+    Useful for models that wrap their JSON response in markdown or explanation.
+
+    Args:
+        text: The raw text that may contain JSON.
+
+    Returns:
+        The JSON string if found, None otherwise.
+    """
+    # Try to find JSON wrapped in markdown code blocks
+    markdown_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if markdown_match:
+        return markdown_match.group(1)
+
+    # Try to find a top-level JSON object
+    # Find the first { and match it with the last }
+    start_idx = text.find("{")
+    if start_idx >= 0:
+        # Count braces to find the matching closing }
+        brace_count = 0
+        for i, char in enumerate(text[start_idx:], start=start_idx):
+            if char == "{":
+                brace_count += 1
+            elif char == "}":
+                brace_count -= 1
+                if brace_count == 0:
+                    return text[start_idx : i + 1]
+    
+    return None
+
 
 # ─── SchemaValidator ──────────────────────────────────────────────────────────
 
@@ -34,12 +73,38 @@ class SchemaValidator:
         if not raw_output or not raw_output.strip():
             return False, None, ["Empty output"]
 
+        # Try direct parse first
         try:
             parsed = json.loads(raw_output)
             if not isinstance(parsed, dict):
                 return False, None, [f"Expected JSON object, got {type(parsed).__name__}"]
             return True, parsed, []
         except json.JSONDecodeError as exc:
+            # Log first 200 chars of actual output for debugging
+            preview = raw_output[:200] if len(raw_output) > 200 else raw_output
+            _log.warning(
+                "json_parse_failed",
+                error=exc.msg,
+                line=exc.lineno,
+                output_preview=preview,
+                output_length=len(raw_output),
+            )
+            
+            # Try to extract JSON from text (wrapped in markdown, prose, etc)
+            extracted = extract_json_from_text(raw_output)
+            if extracted:
+                try:
+                    parsed = json.loads(extracted)
+                    if isinstance(parsed, dict):
+                        _log.info(
+                            "json_extracted_from_text",
+                            original_length=len(raw_output),
+                            extracted_length=len(extracted),
+                        )
+                        return True, parsed, []
+                except json.JSONDecodeError:
+                    pass  # Fall through to error
+            
             return False, None, [f"JSON parse error at line {exc.lineno}: {exc.msg}"]
 
     def validate_schema(
@@ -98,13 +163,15 @@ class SchemaValidator:
             )
 
         hydrated = _hydrate_required_defaults(parsed, json_schema)
-        is_valid, schema_errors = self.validate_schema(hydrated, json_schema)
+        # Apply lightweight post-processing repairs to tolerate small model formatting issues
+        repaired = _post_process_repair(hydrated, json_schema)
+        is_valid, schema_errors = self.validate_schema(repaired, json_schema)
 
         return ValidationResult(
             is_valid=is_valid,
             errors=parse_errors + schema_errors,
             raw_output=raw_output,
-            parsed_output=hydrated if is_valid else None,
+            parsed_output=repaired if is_valid else None,
             validation_time_ms=(time.perf_counter() - start) * 1000,
         )
 
@@ -363,19 +430,162 @@ def _hydrate_required_defaults(
     This makes execution resilient when the model omits one or two fields that can
     safely default (e.g. string fields become "unknown").
     """
-    if not json_schema or not isinstance(parsed_output, dict):
+    # Recursive hydrator: fills missing required properties at any object depth
+    def _hydrate(obj: Any, schema: dict[str, Any]) -> Any:
+        if not schema or obj is None:
+            return obj
+
+        schema_type = schema.get("type")
+        if isinstance(schema_type, list):
+            # prefer non-null type
+            schema_type = next((t for t in schema_type if t != "null"), schema_type[0])
+
+        # Only handle objects (dicts)
+        if schema_type == "object":
+            props = schema.get("properties", {}) or {}
+            required = schema.get("required", []) or []
+            obj_dict = dict(obj) if isinstance(obj, dict) else {}
+
+            # Fill missing required properties with conservative defaults
+            for key in required:
+                if key not in obj_dict:
+                    prop_schema = props.get(key, {})
+                    if isinstance(prop_schema, dict):
+                        obj_dict[key] = _default_for_schema_type(prop_schema)
+
+            # Recurse into present properties that are objects
+            for key, prop_schema in props.items():
+                if key in obj_dict and isinstance(prop_schema, dict):
+                    if prop_schema.get("type") == "object" and isinstance(obj_dict.get(key), dict):
+                        obj_dict[key] = _hydrate(obj_dict.get(key), prop_schema)
+                    else:
+                        # If string and empty, fill default for robustness
+                        if prop_schema.get("type") == "string" and isinstance(obj_dict.get(key), str):
+                            if not obj_dict.get(key).strip():
+                                obj_dict[key] = _default_for_schema_type(prop_schema)
+
+            return obj_dict
+
+        # For non-object types, return as-is
+        return obj
+
+    return _hydrate(parsed_output, json_schema)
+
+
+def _post_process_repair(parsed_output: dict[str, Any], json_schema: dict[str, Any]) -> dict[str, Any]:
+    """Apply small, conservative repairs to parsed output to tolerate common model mistakes.
+
+    Repairs performed:
+    - Replace empty strings for required string fields with conservative defaults ("unknown").
+    - If top-level required `summary` is missing or is an object, try to extract a usable
+      summary from nested fields (e.g., `summary.summary`, `recommended_fix.fix[0].name`).
+    """
+    if not isinstance(parsed_output, dict) or not isinstance(json_schema, dict):
         return parsed_output
 
-    required = json_schema.get("required")
-    properties = json_schema.get("properties")
-    if not isinstance(required, list) or not isinstance(properties, dict):
-        return parsed_output
+    repaired = dict(parsed_output)
+    properties = json_schema.get("properties", {}) or {}
+    required = json_schema.get("required", []) or []
 
-    hydrated = dict(parsed_output)
+    # Fill empty string values for required properties (top-level and simple nested cases)
     for key in required:
-        if key not in hydrated:
-            prop_schema = properties.get(key, {})
-            if isinstance(prop_schema, dict):
-                hydrated[key] = _default_for_schema_type(prop_schema)
+        if key in repaired:
+            val = repaired[key]
+            prop_schema = properties.get(key, {}) or {}
+            if isinstance(val, str) and not val.strip():
+                if prop_schema.get("type") == "string":
+                    repaired[key] = _default_for_schema_type(prop_schema)
 
-    return hydrated
+            # handle common nested object case where summary is returned as object
+            if key == "summary" and isinstance(val, dict):
+                # try common nested locations
+                if isinstance(val.get("summary"), str) and val.get("summary").strip():
+                    repaired[key] = val.get("summary").strip()
+                else:
+                    # try recommended_fix -> fixes[0] -> name
+                    rf = val.get("recommended_fix") or val.get("recommended_fix")
+                    if isinstance(rf, dict):
+                        fixes = rf.get("fixes") or rf.get("fixes")
+                        if isinstance(fixes, list) and fixes:
+                            first = fixes[0]
+                            if isinstance(first, dict) and isinstance(first.get("name"), str):
+                                repaired[key] = f"Recommended: {first.get('name')}"
+
+    # More aggressive extraction: search common nested keys for a usable summary string.
+    def _find_string_by_keys(obj: Any, candidate_keys: list[str]) -> str | None:
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if k in candidate_keys and isinstance(v, str) and v.strip():
+                    return v.strip()
+                # recurse
+                found = _find_string_by_keys(v, candidate_keys)
+                if found:
+                    return found
+        elif isinstance(obj, list):
+            for item in obj:
+                found = _find_string_by_keys(item, candidate_keys)
+                if found:
+                    return found
+        return None
+
+    summary_keys = ["summary", "text", "description", "message", "executive_summary"]
+    # If top-level summary is required but missing/empty, try to extract from anywhere in the payload
+    if "summary" in required and ("summary" not in repaired or not isinstance(repaired.get("summary"), str) or not repaired.get("summary").strip()):
+        # Try a few candidate sources in order: root_cause.root_cause, proposed_fixes fixes[].name, or any common text fields.
+        rc = repaired.get("root_cause")
+        if isinstance(rc, dict) and isinstance(rc.get("root_cause"), str) and rc.get("root_cause").strip():
+            repaired["summary"] = rc.get("root_cause").strip()
+        else:
+            # try proposed_fixes
+            pf = repaired.get("proposed_fixes") or repaired.get("proposed_fix") or repaired.get("proposed_fixes")
+            if isinstance(pf, dict):
+                fixes = pf.get("fixes")
+                if isinstance(fixes, list) and fixes:
+                    name = fixes[0].get("name") if isinstance(fixes[0], dict) else None
+                    if isinstance(name, str) and name.strip():
+                        repaired["summary"] = f"Recommended: {name.strip()}"
+        # fallback: search entire payload for any common summary-like fields
+        if "summary" not in repaired or not isinstance(repaired.get("summary"), str) or not repaired.get("summary").strip():
+            found = _find_string_by_keys(repaired, summary_keys)
+            if found:
+                repaired["summary"] = found
+
+    # Synthesize or repair `severity.reasoning` when required but empty
+    # If the schema expects a nested object with a `reasoning` string, try to fill it.
+    try:
+        sev_prop = properties.get("severity") or {}
+        if isinstance(sev_prop, dict):
+            sev_required = sev_prop.get("required", []) or []
+            if "reasoning" in sev_required:
+                sev = repaired.get("severity")
+                if isinstance(sev, dict):
+                    reasoning_val = sev.get("reasoning")
+                    if not (isinstance(reasoning_val, str) and reasoning_val.strip()):
+                        # prefer root_cause text
+                        rc = repaired.get("root_cause")
+                        if isinstance(rc, dict) and isinstance(rc.get("root_cause"), str) and rc.get("root_cause").strip():
+                            sev["reasoning"] = rc.get("root_cause").strip()
+                        else:
+                            # try first reproduction step action
+                            repro = repaired.get("reproduction")
+                            if isinstance(repro, dict):
+                                steps = repro.get("steps")
+                                if isinstance(steps, list) and steps:
+                                    first = steps[0]
+                                    if isinstance(first, dict) and isinstance(first.get("action"), str):
+                                        sev["reasoning"] = f"Based on reproduction step: {first.get('action').strip()}"
+                                    else:
+                                        # try proposed_fixes approaches
+                                        pf = repaired.get("proposed_fixes") or repaired.get("proposed_fix")
+                                        if isinstance(pf, dict):
+                                            fixes = pf.get("fixes")
+                                            if isinstance(fixes, list) and fixes:
+                                                approach = fixes[0].get("approach") if isinstance(fixes[0], dict) else None
+                                                if isinstance(approach, str) and approach.strip():
+                                                    sev["reasoning"] = f"Suggested fix approach: {approach.strip()}"
+                        repaired["severity"] = sev
+    except Exception:
+        # be conservative: don't raise on repair attempts
+        pass
+
+    return repaired

@@ -18,27 +18,32 @@ export function TemplatesPage() {
   const [runningTemplateId, setRunningTemplateId] = useState<string | null>(null);
 
   async function openTemplate(tpl: CognitiveTemplate) {
-    const id = (tpl as unknown as Record<string, unknown>).templateId as string;
-    if (!id) return;
+    const tplRec = tpl as unknown as Record<string, unknown>;
+    const id = (tplRec.templateId as string) || (tplRec.template_id as string);
+    if (!id) {
+      console.error("openTemplate: no template id found");
+      return;
+    }
     try {
       const res = await api.getTemplate(id);
       const d = res as Record<string, unknown>;
       const full: CognitiveTemplate = {
-        template_id: d.templateId as string,
+        template_id: (d.templateId as string) || (d.template_id as string) || id,
         name: (d.name as string) || "Unknown",
         description: (d.description as string) || "",
         version: (d.version as string) || "1.0.0",
-        schema_version: (d.schemaVersion as string) || "1.0.0",
+        schema_version: (d.schemaVersion as string) || (d.schema_version as string) || "1.0.0",
         nodes: (d.nodes || []) as CognitiveTemplate["nodes"],
-        created_at: (d.createdAt as string) || new Date().toISOString(),
-        updated_at: (d.updatedAt as string) || new Date().toISOString(),
+        created_at: (d.createdAt as string) || (d.created_at as string) || new Date().toISOString(),
+        updated_at: (d.updatedAt as string) || (d.updated_at as string) || new Date().toISOString(),
         tags: (d.tags || []) as string[],
         author: (d.author as string) || "anonymous",
       };
       setSelected(full);
       setDetailOpen(true);
     } catch (e) {
-      console.error("Failed to load template detail", e);
+      console.error(`Failed to load template detail for ${id}:`, e);
+      alert(`Failed to open template: ${(e as Error).message || "Unknown error"}`);
     }
   }
 
@@ -158,7 +163,7 @@ export function TemplatesPage() {
           <tbody>
             {templates.map((tpl, idx) => (
               <tr
-                key={(tpl as unknown as Record<string, unknown>).templateId as string || `tpl-${idx}`}
+                key={((tpl as unknown as Record<string, unknown>).templateId as string) || ((tpl as unknown as Record<string, unknown>).template_id as string) || `tpl-${idx}`}
                 onClick={() => openTemplate(tpl)}
                 className="border-b border-sf-border cursor-pointer transition-colors duration-100 hover:bg-[rgba(255,255,255,0.03)]"
               >
