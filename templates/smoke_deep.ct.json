@@ -1,0 +1,30 @@
+{
+  "template_id": "smoke_deep",
+  "version": "1.0.0",
+  "name": "Smoke Deep Reason Template",
+  "description": "Test template to exercise deep reasoning routing",
+  "nodes": [
+    {
+      "node_id": "analysis_deep_reason",
+      "name": "Analysis (Deep Reason)",
+      "description": "A node intended to trigger Deep Reasoning pipeline",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a test reasoning agent.",
+        "user_template": "Analyze this description:\n\n{description}",
+        "output_schema": {},
+        "required_variables": [
+          "description"
+        ],
+        "max_tokens": 512,
+        "temperature": 0.2
+      },
+      "bento_config": {},
+      "depends_on": [],
+      "can_run_parallel": false,
+      "max_retries": 1,
+      "output_key": "analysis"
+    }
+  ],
+  "result_weaver": null
+}

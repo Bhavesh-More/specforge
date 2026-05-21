@@ -8,7 +8,7 @@ from typing import Any
 import jsonschema
 
 from src.core.logging import get_logger
-from src.models.cognitive_template import DAGNode, ExecutionTier
+from src.models.cognitive_template import DAGNode, ExecutionTier, NodeType
 from src.models.execution import NodeResult, NodeStatus, ValidationResult
 from src.executor.atomic_executor import AtomicExecutor
 
@@ -245,6 +245,7 @@ class RetryOrchestrator:
         """
         json_schema = node.focus_prompt.output_schema
 
+
         # ── TIER 1: Fast Path ────────────────────────────────────────────────
 
         raw_output, rule_files = await self._executor.execute_node(
@@ -254,6 +255,34 @@ class RetryOrchestrator:
             attempt_number=1,
             previous_error=None,
         )
+
+        # If this node is explicitly a deep_reason node, we treat the
+        # reasoning output as free-form text and DO NOT attempt JSON
+        # parsing/validation here. Wrap the free-form text into a simple
+        # parsed_output dict so downstream nodes can reference
+        # `{node.output_key}.analysis_text`.
+        if getattr(node, "node_type", None) == NodeType.DEEP_REASON:
+            _log.info("tier1_deep_reason_passthrough", node_id=node.node_id)
+            parsed = {"analysis_text": raw_output}
+            validation = ValidationResult(
+                is_valid=True,
+                errors=[],
+                raw_output=raw_output,
+                parsed_output=parsed,
+                validation_time_ms=0.0,
+            )
+            return NodeResult(
+                node_id=node.node_id,
+                status=NodeStatus.PASSED_TIER1,
+                tier_used=ExecutionTier.FAST,
+                raw_output=raw_output,
+                parsed_output=parsed,
+                validation_result=validation,
+                attempt_count=1,
+                execution_time_ms=0.0,
+                rule_files_used=rule_files,
+                error_message=None,
+            )
 
         validation = self._validator.validate_output(raw_output, json_schema)
 

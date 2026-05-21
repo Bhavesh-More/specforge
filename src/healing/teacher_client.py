@@ -6,7 +6,10 @@ from typing import Any
 from src.core.exceptions import HealingError, OllamaConnectionError
 from src.core.logging import get_logger
 from src.executor.atomic_executor import OllamaClient
+from src.executor.schema_validator import extract_json_from_text
 from src.models.cognitive_template import DAGNode
+from src.quality.models import TeacherCritique
+from src.quality.prompts import build_final_audit_prompt, build_teacher_critique_prompt
 
 _log = get_logger(__name__)
 
@@ -31,6 +34,105 @@ class TeacherClient:
         self._model = model
         # Re-create client with teacher model
         self._client.model = model
+
+    async def critique_successful_output(
+        self,
+        *,
+        template_name: str,
+        node: DAGNode,
+        original_task: str,
+        current_output: str,
+        output_schema: dict[str, Any],
+        quality_dimensions: list[str],
+        memory_context: str = "",
+    ) -> TeacherCritique:
+        """Ask the teacher to score and critique a successful local output.
+
+        This path is best-effort: malformed teacher responses should not turn a
+        successful execution into a failure.
+        """
+        prompt = build_teacher_critique_prompt(
+            template_name=template_name,
+            node_id=node.node_id,
+            node_description=node.description,
+            node_type=getattr(node.node_type, "value", str(node.node_type)),
+            original_task=original_task,
+            current_output=current_output,
+            output_schema=output_schema,
+            quality_dimensions=quality_dimensions,
+            memory_context=memory_context,
+        )
+        try:
+            raw_response = await self._client.generate(
+                system_prompt=(
+                    "You are a strict senior AI evaluator. Return only valid JSON."
+                ),
+                user_message=prompt,
+                max_tokens=1200,
+                json_mode=True,
+            )
+            parsed = _parse_json_object(raw_response)
+            if parsed is None:
+                raise ValueError("teacher critique response was not a JSON object")
+            return TeacherCritique(**parsed)
+        except Exception as exc:
+            _log.warning(
+                "teacher_success_critique_unavailable",
+                node_id=node.node_id,
+                error=str(exc),
+            )
+            return TeacherCritique(
+                quality_score=0.5,
+                should_revise=False,
+                concise_summary="Teacher critique unavailable",
+            )
+
+    async def audit_final_output(
+        self,
+        *,
+        template_name: str,
+        user_input: dict[str, Any],
+        final_output: dict[str, Any],
+        memory_context: str = "",
+    ) -> dict[str, Any]:
+        """Teacher audits cross-node consistency of final output."""
+        prompt = build_final_audit_prompt(
+            template_name=template_name,
+            user_input=user_input,
+            final_output=final_output,
+            memory_context=memory_context,
+        )
+        try:
+            raw_response = await self._client.generate(
+                system_prompt=(
+                    "You are a strict final QA auditor for structured AI outputs. "
+                    "Return only valid JSON."
+                ),
+                user_message=prompt,
+                max_tokens=1200,
+                json_mode=True,
+            )
+            parsed = _parse_json_object(raw_response)
+            if parsed is None:
+                raise ValueError("teacher final audit response was not JSON")
+            return {
+                "quality_score": float(parsed.get("quality_score", 0.5)),
+                "audit_notes": list(parsed.get("audit_notes") or []),
+                "consistency_issues": list(parsed.get("consistency_issues") or []),
+                "missing_details": list(parsed.get("missing_details") or []),
+                "rewrite_instructions": list(parsed.get("rewrite_instructions") or []),
+                "should_rewrite": bool(parsed.get("should_rewrite", False)),
+            }
+        except Exception as exc:
+            _log.warning("teacher_final_audit_unavailable", error=str(exc))
+            return {
+                "quality_score": 0.5,
+                "audit_notes": ["Teacher final audit unavailable"],
+                "consistency_issues": [],
+                "missing_details": [],
+                "rewrite_instructions": [],
+                "should_rewrite": False,
+            }
 
     async def diagnose_and_prescribe(
         self,
@@ -132,3 +234,18 @@ Output ONLY a JSON object:
                     "response_preview": raw_response[:500],
                 },
             ) from exc
+
+
+def _parse_json_object(raw_response: str) -> dict[str, Any] | None:
+    try:
+        parsed = json.loads(raw_response)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        extracted = extract_json_from_text(raw_response)
+        if not extracted:
+            return None
+        try:
+            parsed = json.loads(extracted)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            return None

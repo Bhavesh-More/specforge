@@ -25,6 +25,8 @@ from src.healing.failure_detector import FailureTracker
 from src.healing.teacher_client import TeacherClient
 from src.healing.rule_patcher import RulePatcher
 from src.healing import SelfHealingOrchestrator
+from src.quality.memory_bank import QualityMemoryBank
+from src.quality.quality_orchestrator import QualityOrchestrator
 from src.symbolic.mcp_client import MCPClient
 from src.symbolic.symbolic_node import SymbolicNodeExecutor
 from src.symbolic.tool_registry import ToolRegistry
@@ -67,7 +69,13 @@ def _build_engine() -> SpecForgeEngine:
     mcp_client = MCPClient(registry=tool_registry)
 
     # Ollama
-    ollama = create_ollama_client(cfg)
+    default_model = getattr(cfg, "ollama_model", "llama3.1:8b")
+    teacher_model = getattr(cfg, "ollama_teacher_model", "llama3.1:8b")
+    ollama = create_ollama_client(
+        base_url=str(cfg.ollama_base_url),
+        model=default_model,
+        temperature=cfg.ollama_temperature,
+    )
 
     # Context surgeon
     surgeon = ContextSurgeon(rules_dir=rules_dir)
@@ -91,7 +99,14 @@ def _build_engine() -> SpecForgeEngine:
 
     # Healing
     tracker = FailureTracker()
-    teacher = TeacherClient(ollama_client=ollama)
+    teacher = TeacherClient(
+        ollama_client=create_ollama_client(
+            base_url=str(cfg.ollama_base_url),
+            model=default_model,
+            temperature=cfg.ollama_temperature,
+        ),
+        model=teacher_model,
+    )
     patcher = RulePatcher(rules_dir=rules_dir)
     healing = SelfHealingOrchestrator(
         tracker=tracker,
@@ -117,6 +132,16 @@ def _build_engine() -> SpecForgeEngine:
     # Registry + knowledge manager
     registry = TemplateRegistry(templates_dir=templates_dir)
     kg = KnowledgeGraphManager(rules_dir=rules_dir)
+    memory_bank = QualityMemoryBank(db_path=Path("output") / "quality_memory.sqlite3")
+    # The memory bank lazily initializes again during first use in the web path,
+    # but Celery builds synchronously, so create the table here.
+    memory_bank._initialize_sync()
+    quality = QualityOrchestrator(
+        memory_bank=memory_bank,
+        teacher_client=teacher,
+        local_client=ollama,
+        schema_validator=validator,
+    )
 
     return SpecForgeEngine(
         confidence_gate=gate,
@@ -124,6 +149,7 @@ def _build_engine() -> SpecForgeEngine:
         state_writer=state_writer,
         template_registry=registry,
         knowledge_manager=kg,
+        quality_orchestrator=quality,
     )
 
 

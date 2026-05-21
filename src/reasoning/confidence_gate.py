@@ -12,7 +12,8 @@ from src.executor.result_weaver import ResultWeaver, StateFileWriter
 from src.compiler.template_registry import TemplateRegistry
 from src.knowledge.graph_manager import KnowledgeGraphManager
 from src.models.cognitive_template import CognitiveTemplate, DAGNode, ExecutionTier, NodeType
-from src.models.execution import ExecutionRun, ExecutionStatus, NodeResult, NodeStatus
+from src.models.execution import ExecutionRun, ExecutionStatus, NodeResult, NodeStatus, ValidationResult
+from src.quality.quality_orchestrator import QualityOrchestrator
 from src.reasoning.adversarial_triad import AdversarialTriad
 from src.reasoning.lookahead_dag import LookaheadDAG
 from src.reasoning.cognitive_rollback import CognitiveRollback
@@ -234,12 +235,14 @@ class SpecForgeEngine:
         state_writer: StateFileWriter,
         template_registry: TemplateRegistry,
         knowledge_manager: KnowledgeGraphManager,
+        quality_orchestrator: QualityOrchestrator | None = None,
     ) -> None:
         self._gate = confidence_gate
         self._weaver = result_weaver
         self._state = state_writer
         self._registry = template_registry
         self._kg = knowledge_manager
+        self._quality = quality_orchestrator
 
     async def execute_template(
         self,
@@ -281,6 +284,7 @@ class SpecForgeEngine:
         await self._kg.initialize()
 
         global_state: dict[str, Any] = {}
+        quality_config = template.quality_config.normalized_for_mode()
         critical_path = set(template.get_execution_order()[0] if template.get_execution_order() else [])
 
         waves = template.get_execution_order()
@@ -295,10 +299,28 @@ class SpecForgeEngine:
         for wave_idx, wave in enumerate(waves):
             _log.info("wave_start", run_id=rid, wave=wave_idx, nodes=wave)
 
+            prepared_contexts: dict[str, tuple[dict[str, Any], str]] = {}
+            for node_id in wave:
+                node = self._find_node(template, node_id)
+                if self._quality is None:
+                    prepared_contexts[node_id] = (global_state, "")
+                    continue
+                augmented_state, _memories, memory_context = (
+                    await self._quality.prepare_node_context(
+                        template=template,
+                        node=node,
+                        run_id=rid,
+                        input_data=input_data,
+                        global_state=global_state,
+                        quality_config=quality_config,
+                    )
+                )
+                prepared_contexts[node_id] = (augmented_state, memory_context)
+
             wave_tasks = [
                 self._gate.execute_node(
                     node=self._find_node(template, node_id),
-                    global_state=global_state,
+                    global_state=prepared_contexts[node_id][0],
                     input_data=input_data,
                     template_id=template.template_id,
                     run_id=rid,
@@ -336,6 +358,60 @@ class SpecForgeEngine:
                         error_message=error_message,
                     )
 
+                quality_result = None
+                quality_state, memory_context = prepared_contexts.get(
+                    node_id, (global_state, "")
+                )
+                if (
+                    self._quality is not None
+                    and result.status
+                    in {
+                        NodeStatus.PASSED_TIER1,
+                        NodeStatus.PASSED_TIER2,
+                        NodeStatus.PASSED_TIER3,
+                    }
+                ):
+                    try:
+                        quality_result = await self._quality.maybe_improve_node_output(
+                            template=template,
+                            node=node,
+                            run_id=rid,
+                            input_data=input_data,
+                            global_state=quality_state,
+                            raw_output=result.raw_output,
+                            parsed_output=result.parsed_output,
+                            memory_context=memory_context,
+                            quality_config=quality_config,
+                        )
+                        if quality_result.used_revision and quality_result.revised_output:
+                            result.raw_output = quality_result.revised_output
+                            if node.node_type == NodeType.DEEP_REASON:
+                                result.parsed_output = {
+                                    "analysis_text": quality_result.revised_output
+                                }
+                                result.validation_result = ValidationResult(
+                                    is_valid=True,
+                                    errors=[],
+                                    raw_output=quality_result.revised_output,
+                                    parsed_output=result.parsed_output,
+                                    validation_time_ms=0.0,
+                                )
+                            else:
+                                validation = self._quality.schema_validator.validate_output(
+                                    quality_result.revised_output,
+                                    node.focus_prompt.output_schema,
+                                )
+                                if validation.is_valid:
+                                    result.parsed_output = validation.parsed_output
+                                    result.validation_result = validation
+                    except Exception as exc:
+                        _log.warning(
+                            "quality_node_improvement_failed",
+                            run_id=rid,
+                            node_id=node_id,
+                            error=str(exc),
+                        )
+
                 # Check for human edits before propagating output
                 if result.parsed_output:
                     result.parsed_output = await self._weaver.check_for_human_edits(
@@ -344,6 +420,26 @@ class SpecForgeEngine:
 
                 execution_run.node_results[node_id] = result
                 global_state = self._weaver.update_global_state(global_state, node, result)
+                if self._quality is not None:
+                    try:
+                        await self._quality.record_node_result(
+                            template=template,
+                            node=node,
+                            run_id=rid,
+                            input_data=input_data,
+                            global_state=quality_state,
+                            raw_output=result.raw_output,
+                            parsed_output=result.parsed_output,
+                            status=result.status.value,
+                            quality_result=quality_result,
+                        )
+                    except Exception as exc:
+                        _log.warning(
+                            "quality_memory_record_failed",
+                            run_id=rid,
+                            node_id=node_id,
+                            error=str(exc),
+                        )
                 await self._state.append_node_result(node, result)
 
                 # Abort on critical path failure
@@ -373,9 +469,28 @@ class SpecForgeEngine:
         execution_run.status = ExecutionStatus.FAILED if any_failed else ExecutionStatus.COMPLETED
         execution_run.completed_at = datetime.now(timezone.utc)
         execution_run.total_execution_time_ms = (time.perf_counter() - start_ms) * 1000
-        execution_run.final_output = self._weaver.assemble_final_output(
+        execution_run.global_state = global_state
+        final_output = self._weaver.assemble_final_output(
             global_state, template, execution_run,
         )
+        if self._quality is not None:
+            try:
+                audit_result = await self._quality.audit_and_polish_final_output(
+                    template=template,
+                    run_id=rid,
+                    input_data=input_data,
+                    final_output=final_output,
+                    quality_config=quality_config,
+                )
+                final_output = audit_result.audited_output
+            except Exception as exc:
+                _log.warning(
+                    "quality_final_audit_failed",
+                    run_id=rid,
+                    error=str(exc),
+                )
+
+        execution_run.final_output = final_output
 
         await self._state.finalize(execution_run, success=not any_failed)
 

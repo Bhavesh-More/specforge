@@ -1,17 +1,17 @@
 {
   "template_id": "bug_report_enhanced",
-  "version": "2.0.0",
-  "name": "Bug Report Cognitive Template (Enhanced with SPA + Deep Reasoning + SCS)",
-  "description": "Generates structured bug reports from raw error descriptions using a 6-node adversarial reasoning pipeline with Deep Reasoning, SPA, and SCS optimizations",
+  "version": "4.0.0",
+  "name": "Bug Report Cognitive Template (Cloud Quality)",
+  "description": "Generates cloud-quality bug reports with deep reasoning, persistent memory, teacher critique, local revision, and final consistency audit.",
   "nodes": [
     {
       "node_id": "metadata_extraction",
       "name": "Metadata Extraction",
-      "description": "Extracts identifying metadata from raw bug report: title, component, reporter, date",
+      "description": "Extracts identifying metadata. Standard node — pure extraction, no reasoning needed.",
       "node_type": "standard",
       "focus_prompt": {
-        "system_prompt": "You are a meticulous bug report analyst. Your specialty is extracting precise metadata from raw error descriptions. You ALWAYS output ONLY valid JSON matching the required schema, nothing else. Never guess \u2014 if information is not present, use 'unknown'. Dates must be ISO 8601 format.",
-        "user_template": "Extract metadata from this bug report and output ONLY a JSON object (nothing before or after):\n\n{description}\n\nOutput exactly this JSON structure with no markdown, no explanation, no extra text:\n{\"title\": \"...\", \"component\": \"...\", \"reported_by\": \"...\", \"date\": \"...\"}",
+        "system_prompt": "You are a meticulous bug report analyst. Extract precise metadata from raw error descriptions. Output ONLY valid JSON. Never guess — if information is not present, use 'unknown'. Dates must be ISO 8601 format.",
+        "user_template": "Extract metadata from this bug report and output ONLY a JSON object (nothing before or after):\n\n{description}\n\nOutput exactly this JSON structure:\n{\"title\": \"...\", \"component\": \"...\", \"reported_by\": \"...\", \"date\": \"...\"}",
         "output_schema": {
           "type": "object",
           "required": [
@@ -22,8 +22,7 @@
           ],
           "properties": {
             "title": {
-              "type": "string",
-              "maxLength": 100
+              "type": "string"
             },
             "component": {
               "type": "string"
@@ -39,8 +38,8 @@
         "required_variables": [
           "description"
         ],
-        "max_tokens": 256,
-        "temperature": 0.2
+        "max_tokens": 300,
+        "temperature": 0.1
       },
       "bento_config": {
         "rule_files": [
@@ -53,13 +52,261 @@
       "output_key": "metadata"
     },
     {
-      "node_id": "severity_classification",
-      "name": "Severity Classification",
-      "description": "Classifies bug severity (critical/high/medium/low) and assigns priority (P0-P3) based on impact analysis using Deep Reasoning for multi-factor evaluation",
+      "node_id": "reproduction_steps",
+      "name": "Reproduction Steps Generator",
+      "description": "Generates numbered reproduction steps. Standard node with SPA to keep output focused.",
       "node_type": "standard",
       "focus_prompt": {
-        "system_prompt": "You are a senior reliability engineer specializing in severity triage. You classify bugs with surgical precision. ALWAYS output ONLY valid JSON (nothing before or after). Use severity ratings: critical (data loss/security/system failure), high (regression/significant degraded perf), medium (UI glitch/non-blocking), low (warning/advisory). Priority: P0=immediate, P1=24h, P2=1 week, P3=backlog.",
-        "user_template": "Classify severity and priority for this bug and output ONLY JSON with no explanation:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\nReporter: {metadata.reported_by}\nDate: {metadata.date}\n\nOutput exactly this JSON structure (no markdown, no extra text). The `reasoning` field MUST be a single-line, non-empty string (minimum 20 words):\n{\"severity\": \"critical|high|medium|low\", \"priority\": \"P0|P1|P2|P3\", \"reasoning\": \"A concise, single-paragraph justification (min 20 words)\"}",
+        "system_prompt": "You are a QA engineer. Generate bulletproof reproduction steps. Each step has: step_number (int starting 1), action, expected, actual. Steps must be specific enough for any engineer to reproduce. Minimum 3 steps, maximum 8. Output ONLY valid JSON.",
+        "user_template": "Generate reproduction steps for this bug and output ONLY JSON:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\nBug description: {description}\n\nOutput exactly:\n{\"steps\": [{\"step_number\": 1, \"action\": \"...\", \"expected\": \"...\", \"actual\": \"...\"}]}",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "steps"
+          ],
+          "properties": {
+            "steps": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 8,
+              "items": {
+                "type": "object",
+                "required": [
+                  "step_number",
+                  "action",
+                  "expected",
+                  "actual"
+                ],
+                "properties": {
+                  "step_number": {
+                    "type": "integer"
+                  },
+                  "action": {
+                    "type": "string"
+                  },
+                  "expected": {
+                    "type": "string"
+                  },
+                  "actual": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required_variables": [
+          "metadata",
+          "description"
+        ],
+        "max_tokens": 900,
+        "temperature": 0.4
+      },
+      "bento_config": {
+        "rule_files": [
+          "error_handling_guidelines"
+        ],
+        "pressure_annealing": {
+          "warn_threshold": 0.28,
+          "inject_threshold": 0.48,
+          "min_tokens_between_injections": 80,
+          "pressure_schedule": "standard"
+        }
+      },
+      "depends_on": [
+        "metadata_extraction"
+      ],
+      "can_run_parallel": true,
+      "max_retries": 2,
+      "output_key": "reproduction"
+    },
+    {
+      "node_id": "deep_free_reasoning",
+      "name": "Deep Free Reasoning Analysis",
+      "description": "Core analysis node. Thinks in natural language across 8 technical dimensions with no formatting constraints. All downstream nodes consume this output. node_type deep_reason activates budget forcing and socratic decomposition.",
+      "node_type": "deep_reason",
+      "focus_prompt": {
+        "system_prompt": "You are a senior distributed systems engineer with deep expertise in collaborative editing systems, WebSocket protocols, operational transforms, CRDTs, and race condition analysis. You think rigorously and exhaustively. You consider multiple hypotheses simultaneously. You identify non-obvious failure modes. You trace causality chains end-to-end. You never stop at the first plausible explanation — you generate competing hypotheses and evaluate their likelihood. Write in detailed technical prose. Do not format as JSON. Think deeply.",
+        "user_template": "Perform a comprehensive technical analysis of this bug report. Think through ALL of the following dimensions:\n\n1. ROOT CAUSES: What are ALL plausible root causes (minimum 3)? For each, trace the exact code/system path that would produce the observed symptoms.\n\n2. RACE CONDITIONS: What specific race conditions exist? Name the competing processes and the exact interleaving that produces corruption.\n\n3. STATE MANAGEMENT FAILURES: Where does client-side or server-side state diverge? What invariants are violated?\n\n4. BACKEND SYNCHRONIZATION: What backend systems (databases, queues, caches) are implicated? How does replication lag or write ordering contribute?\n\n5. ARCHITECTURAL WEAKNESSES: What deeper design decisions made this class of bug possible? What would need to change architecturally to prevent it?\n\n6. SECURITY AND DATA INTEGRITY RISKS: Beyond the immediate bug, what data integrity or security implications exist?\n\n7. REGRESSION LIKELIHOOD: What recent system changes (migrations, dependency upgrades, config changes) are most likely to have introduced this regression?\n\n8. CONFIDENCE AND REPRODUCIBILITY: How reproducible is this? What conditions make it more or less likely to appear?\n\nBug Title: {metadata.title}\nComponent: {metadata.component}\nReporter: {metadata.reported_by}\nFull description: {description}\nReproduction steps: {reproduction.steps}\n\nBe exhaustive. Use technical terminology. This analysis will be used by senior engineers to plan a fix. Do not hold back detail.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "analysis_text"
+          ],
+          "properties": {
+            "analysis_text": {
+              "type": "string"
+            }
+          }
+        },
+        "required_variables": [
+          "metadata",
+          "description",
+          "reproduction"
+        ],
+        "max_tokens": 2800,
+        "temperature": 0.65
+      },
+      "bento_config": {
+        "rule_files": [
+          "error_handling_guidelines",
+          "code_review_standards",
+          "cloud_quality_standards"
+        ],
+        "reasoning_budget": {
+          "min_tokens": 400,
+          "max_tokens": 2800,
+          "allow_early_exit_if_confidence": 0.95
+        },
+        "socratic_config": {
+          "num_questions": 4,
+          "question_max_tokens": 180,
+          "answer_max_tokens": 300,
+          "synthesis_max_tokens": 1200
+        },
+        "scs_config": {
+          "n_drafts": 5,
+          "draft_length": 50,
+          "confidence_threshold": 0.7,
+          "node_type_override": "reason"
+        },
+        "pressure_annealing": {
+          "warn_threshold": 0.35,
+          "inject_threshold": 0.62,
+          "min_tokens_between_injections": 200,
+          "pressure_schedule": "gentle"
+        },
+        "cloud_quality": {
+          "enabled": true,
+          "teacher_review": true,
+          "preserve_free_reasoning": true,
+          "quality_dimensions": [
+            "technical_depth",
+            "specificity",
+            "causal_trace",
+            "cross_node_consistency",
+            "actionability"
+          ],
+          "min_quality_score": 0.8
+        }
+      },
+      "depends_on": [
+        "metadata_extraction",
+        "reproduction_steps"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "output_key": "free_reasoning"
+    },
+    {
+      "node_id": "root_cause_analysis",
+      "name": "Root Cause Analysis (Structured)",
+      "description": "Formatting only — structures the free_reasoning output into JSON. Does NOT generate new analysis. Preserves full technical depth from deep_free_reasoning.",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a technical writer. Your job is to EXTRACT and STRUCTURE information that already exists in an analysis. Do NOT generate new analysis. Do NOT simplify or summarize — preserve technical depth. Output ONLY valid JSON.",
+        "user_template": "Structure the following technical analysis into a JSON root cause report. Extract ALL root causes mentioned (minimum 3). Preserve all technical detail — do not simplify. Output ONLY JSON with no explanation:\n\nAnalysis to structure:\n{free_reasoning.analysis_text}\n\nOutput exactly this JSON structure. The root_cause string MUST be comprehensive (minimum 150 words), covering ALL root causes, race conditions, and state management failures identified. technical_depth must be 'deep':\n{\"root_cause\": \"comprehensive multi-paragraph explanation covering all root causes, race conditions, and state management failures identified\", \"technical_depth\": \"deep\", \"hypothesis_confidence\": 0.85, \"additional_findings\": {\"race_conditions\": [\"condition 1\", \"condition 2\"], \"architectural_weaknesses\": [\"weakness 1\", \"weakness 2\"], \"regression_source\": \"most likely regression source\", \"data_integrity_risks\": [\"risk 1\"]}}",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "root_cause",
+            "technical_depth",
+            "hypothesis_confidence"
+          ],
+          "properties": {
+            "root_cause": {
+              "type": "string"
+            },
+            "technical_depth": {
+              "type": "string",
+              "enum": [
+                "shallow",
+                "moderate",
+                "deep"
+              ]
+            },
+            "hypothesis_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "additional_findings": {
+              "type": "object",
+              "properties": {
+                "race_conditions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "architectural_weaknesses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "regression_source": {
+                  "type": "string"
+                },
+                "data_integrity_risks": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required_variables": [
+          "metadata",
+          "reproduction",
+          "free_reasoning"
+        ],
+        "max_tokens": 2000,
+        "temperature": 0.2
+      },
+      "bento_config": {
+        "rule_files": [
+          "error_handling_guidelines",
+          "code_review_standards",
+          "cloud_quality_standards"
+        ],
+        "pressure_annealing": {
+          "warn_threshold": 0.22,
+          "inject_threshold": 0.4,
+          "min_tokens_between_injections": 120,
+          "pressure_schedule": "strict"
+        },
+        "cloud_quality": {
+          "enabled": true,
+          "teacher_review": true,
+          "preserve_free_reasoning": true,
+          "quality_dimensions": [
+            "technical_depth",
+            "specificity",
+            "causal_trace",
+            "cross_node_consistency",
+            "actionability"
+          ],
+          "min_quality_score": 0.8
+        }
+      },
+      "depends_on": [
+        "deep_free_reasoning"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "output_key": "root_cause"
+    },
+    {
+      "node_id": "severity_classification",
+      "name": "Severity Classification",
+      "description": "Classifies severity informed by the deep analysis output, not just metadata.",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a senior reliability engineer. Classify bugs with surgical precision. Output ONLY valid JSON. Use: critical (data loss/security/system failure), high (regression/significant perf), medium (UI/non-blocking), low (advisory). Priority: P0=immediate, P1=24h, P2=1 week, P3=backlog.",
+        "user_template": "Classify severity based on this deep technical analysis and output ONLY JSON:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\nDeep analysis: {free_reasoning.analysis_text}\n\nOutput exactly this JSON (reasoning MUST be minimum 40 words referencing specific technical findings from the analysis, not just the title):\n{\"severity\": \"critical|high|medium|low\", \"priority\": \"P0|P1|P2|P3\", \"reasoning\": \"detailed justification referencing specific findings from the analysis\"}",
         "output_schema": {
           "type": "object",
           "required": [
@@ -92,167 +339,52 @@
           }
         },
         "required_variables": [
-          "metadata"
+          "metadata",
+          "free_reasoning"
         ],
-        "max_tokens": 600,
-        "temperature": 0.3
+        "max_tokens": 700,
+        "temperature": 0.2
       },
       "bento_config": {
         "rule_files": [
-          "severity_classification"
+          "severity_classification",
+          "cloud_quality_standards"
         ],
         "pressure_annealing": {
-          "warn_threshold": 0.25,
-          "inject_threshold": 0.45,
+          "warn_threshold": 0.22,
+          "inject_threshold": 0.42,
           "min_tokens_between_injections": 60,
           "pressure_schedule": "strict"
+        },
+        "cloud_quality": {
+          "enabled": true,
+          "teacher_review": true,
+          "preserve_free_reasoning": true,
+          "quality_dimensions": [
+            "technical_depth",
+            "specificity",
+            "causal_trace",
+            "cross_node_consistency",
+            "actionability"
+          ],
+          "min_quality_score": 0.8
         }
       },
       "depends_on": [
-        "metadata_extraction"
+        "deep_free_reasoning"
       ],
-      "can_run_parallel": false,
+      "can_run_parallel": true,
       "max_retries": 2,
       "output_key": "severity"
     },
     {
-      "node_id": "reproduction_steps",
-      "name": "Reproduction Steps Generator",
-      "description": "Generates numbered, precise reproduction steps using adversarial triad (Creator+Cynic+Resolver) with SPA to keep output focused and concise",
-      "node_type": "standard",
-      "focus_prompt": {
-        "system_prompt": "You are a QA engineer. Generate bulletproof reproduction steps. Each step has: step_number (int starting 1), action, expected, actual. Steps must be specific enough for any engineer to reproduce. Minimum 3 steps, maximum 8. ALWAYS output ONLY valid JSON (nothing before or after).",
-        "user_template": "Generate reproduction steps for this bug and output ONLY JSON with no explanation:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\nBug description: {description}\n\nOutput exactly this JSON structure (no markdown, no extra text):\n{\"steps\": [{\"step_number\": 1, \"action\": \"...\", \"expected\": \"...\", \"actual\": \"...\"}, ...]}",
-        "output_schema": {
-          "type": "object",
-          "required": [
-            "steps"
-          ],
-          "properties": {
-            "steps": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "required": [
-                  "step_number",
-                  "action",
-                  "expected",
-                  "actual"
-                ],
-                "properties": {
-                  "step_number": {
-                    "type": "integer"
-                  },
-                  "action": {
-                    "type": "string"
-                  },
-                  "expected": {
-                    "type": "string"
-                  },
-                  "actual": {
-                    "type": "string"
-                  }
-                }
-              },
-              "minItems": 3,
-              "maxItems": 8
-            }
-          }
-        },
-        "required_variables": [
-          "metadata",
-          "description"
-        ],
-        "max_tokens": 800,
-        "temperature": 0.4
-      },
-      "bento_config": {
-        "rule_files": [
-          "error_handling_guidelines"
-        ],
-        "pressure_annealing": {
-          "warn_threshold": 0.28,
-          "inject_threshold": 0.48,
-          "min_tokens_between_injections": 80,
-          "pressure_schedule": "standard"
-        }
-      },
-      "depends_on": [
-        "metadata_extraction"
-      ],
-      "can_run_parallel": true,
-      "max_retries": 2,
-      "output_key": "reproduction"
-    },
-    {
-      "node_id": "root_cause_analysis",
-      "name": "Root Cause Analysis",
-      "description": "Performs deep causal analysis of bug root cause using Deep Reasoning for multi-hypothesis evaluation and SPA to prevent wandering explanations",
-      "node_type": "standard",
-      "focus_prompt": {
-        "system_prompt": "You are a debugging expert. Analyze root causes with technical depth. ALWAYS output ONLY valid JSON (nothing before or after).",
-        "user_template": "Analyze the root cause of this bug and output ONLY JSON with no explanation:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\nRepro steps: {reproduction.steps}\n\nOutput exactly this JSON structure (no markdown, no extra text):\n{\"root_cause\": \"detailed explanation\", \"technical_depth\": \"shallow|moderate|deep\", \"hypothesis_confidence\": 0.85}",
-        "output_schema": {
-          "type": "object",
-          "required": [
-            "root_cause",
-            "technical_depth",
-            "hypothesis_confidence"
-          ],
-          "properties": {
-            "root_cause": {
-              "type": "string"
-            },
-            "technical_depth": {
-              "type": "string",
-              "enum": [
-                "shallow",
-                "moderate",
-                "deep"
-              ]
-            },
-            "hypothesis_confidence": {
-              "type": "number",
-              "minimum": 0,
-              "maximum": 1
-            }
-          }
-        },
-        "required_variables": [
-          "metadata",
-          "reproduction"
-        ],
-        "max_tokens": 1000,
-        "temperature": 0.3
-      },
-      "bento_config": {
-        "rule_files": [
-          "error_handling_guidelines",
-          "code_review_standards"
-        ],
-        "pressure_annealing": {
-          "warn_threshold": 0.26,
-          "inject_threshold": 0.46,
-          "min_tokens_between_injections": 100,
-          "pressure_schedule": "strict"
-        }
-      },
-      "depends_on": [
-        "metadata_extraction",
-        "reproduction_steps"
-      ],
-      "can_run_parallel": false,
-      "max_retries": 2,
-      "output_key": "root_cause"
-    },
-    {
       "node_id": "proposed_fixes",
       "name": "Proposed Fixes Generator",
-      "description": "Generates 2-3 alternative fixes with trade-off analysis using Deep Reasoning and SCS for coherent multi-solution generation",
+      "description": "Generates fixes that directly address the race conditions and architectural weaknesses from the deep analysis.",
       "node_type": "standard",
       "focus_prompt": {
-        "system_prompt": "You are a software architect. Generate exactly TWO distinct fixes with pros, cons, and integer effort estimates (hours). ALWAYS output ONLY valid JSON (nothing before or after). Use arrays for pros/cons and ensure each field is present.",
-        "user_template": "Generate exactly 2 proposed fixes for this bug and output ONLY JSON with no explanation:\n\nTitle: {metadata.title}\nComponent: {metadata.component}\nRoot cause: {root_cause.root_cause}\n\nOutput exactly this JSON structure (no markdown, no extra text). The \"fixes\" array MUST contain 2 objects and each object MUST include: name (string), approach (string), pros (non-empty array of strings), cons (non-empty array of strings), effort_hours (integer). Set \"recommended_index\" to the index (0 or 1) of the recommended fix. Example output:\n{\"fixes\": [{\"name\": \"Fix Option 1\", \"approach\": \"Make X change to Y module\", \"pros\": [\"fast\", \"low risk\"], \"cons\": [\"temporary\"], \"effort_hours\": 8}, {\"name\": \"Fix Option 2\", \"approach\": \"Refactor Z subsystem\", \"pros\": [\"robust\"], \"cons\": [\"longer\", \"requires migration\"], \"effort_hours\": 40}], \"recommended_index\": 0}",
+        "system_prompt": "You are a software architect. Generate exactly TWO distinct fixes informed by a deep technical analysis. Each fix must directly address the root causes identified. Output ONLY valid JSON with arrays for pros/cons.",
+        "user_template": "Generate exactly 2 proposed fixes based on this deep analysis. Output ONLY JSON:\n\nTitle: {metadata.title}\nRoot cause: {root_cause.root_cause}\nRace conditions: {root_cause.additional_findings.race_conditions}\nArchitectural weaknesses: {root_cause.additional_findings.architectural_weaknesses}\nDeep analysis: {free_reasoning.analysis_text}\n\nFixes MUST address the specific race conditions and architectural weaknesses listed above, not surface symptoms. Output exactly this JSON (2 fixes required):\n{\"fixes\": [{\"name\": \"...\", \"approach\": \"detailed approach addressing identified root causes\", \"addresses\": [\"specific race condition or weakness from above\"], \"pros\": [\"...\"], \"cons\": [\"...\"], \"effort_hours\": 0}, {\"name\": \"...\", \"approach\": \"...\", \"addresses\": [\"...\"], \"pros\": [\"...\"], \"cons\": [\"...\"], \"effort_hours\": 0}], \"recommended_index\": 0}",
         "output_schema": {
           "type": "object",
           "required": [
@@ -262,6 +394,8 @@
           "properties": {
             "fixes": {
               "type": "array",
+              "minItems": 2,
+              "maxItems": 3,
               "items": {
                 "type": "object",
                 "required": [
@@ -278,6 +412,12 @@
                   "approach": {
                     "type": "string"
                   },
+                  "addresses": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "pros": {
                     "type": "array",
                     "items": {
@@ -293,12 +433,10 @@
                   "effort_hours": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 100
+                    "maximum": 200
                   }
                 }
-              },
-              "minItems": 2,
-              "maxItems": 3
+              }
             },
             "recommended_index": {
               "type": "integer",
@@ -309,37 +447,52 @@
         },
         "required_variables": [
           "metadata",
-          "root_cause"
+          "root_cause",
+          "free_reasoning"
         ],
-        "max_tokens": 1200,
-        "temperature": 0.5
+        "max_tokens": 1800,
+        "temperature": 0.45
       },
       "bento_config": {
         "rule_files": [
-          "code_review_standards"
+          "code_review_standards",
+          "cloud_quality_standards"
         ],
         "pressure_annealing": {
           "warn_threshold": 0.3,
-          "inject_threshold": 0.5,
-          "min_tokens_between_injections": 100,
+          "inject_threshold": 0.52,
+          "min_tokens_between_injections": 120,
           "pressure_schedule": "standard"
+        },
+        "cloud_quality": {
+          "enabled": true,
+          "teacher_review": true,
+          "preserve_free_reasoning": true,
+          "quality_dimensions": [
+            "technical_depth",
+            "specificity",
+            "causal_trace",
+            "cross_node_consistency",
+            "actionability"
+          ],
+          "min_quality_score": 0.8
         }
       },
       "depends_on": [
         "root_cause_analysis"
       ],
-      "can_run_parallel": false,
+      "can_run_parallel": true,
       "max_retries": 2,
       "output_key": "proposed_fixes"
     },
     {
       "node_id": "executive_summary",
       "name": "Executive Summary",
-      "description": "Generates a concise, actionable executive summary of the bug report with SPA to keep output focused and prevent rambling",
+      "description": "Generates a comprehensive executive summary with access to full deep analysis, race conditions, architectural weaknesses, and data integrity risks.",
       "node_type": "standard",
       "focus_prompt": {
-        "system_prompt": "You are a technical communicator. Write clear summaries. ALWAYS output ONLY valid JSON (nothing before or after).",
-        "user_template": "Generate an executive summary and output ONLY JSON with no explanation:\n\nSeverity: {severity.severity}\nPriority: {severity.priority}\nRoot cause: {root_cause.root_cause}\nRecommended fix: {proposed_fixes.fixes[{proposed_fixes.recommended_index}].name}\n\nOutput exactly this JSON structure (no markdown, no extra text). The `summary` MUST be a single JSON string (no nested objects), plain text only, 150-250 words:\n{\"summary\": \"A clear, actionable executive summary (150-250 words).\"}",
+        "system_prompt": "You are a technical communicator writing for a VP of Engineering. Write summaries that are comprehensive yet actionable. Cover: what broke, why it broke technically, what the risks are, and what to do. Output ONLY valid JSON.",
+        "user_template": "Write a single prose paragraph of 200-300 words summarizing this bug for a VP of Engineering. Output ONLY this JSON and nothing else:\n\n{\"summary\": \"your 200-300 word prose summary here\"}\n\nFacts to include:\n- Severity: {severity.severity}, Priority: {severity.priority}\n- Root cause: {root_cause.root_cause}\n- Race conditions: {root_cause.additional_findings.race_conditions}\n- Architectural risk: {root_cause.additional_findings.architectural_weaknesses}\n- Data integrity risk: {root_cause.additional_findings.data_integrity_risks}\n- Regression source: {root_cause.additional_findings.regression_source}\n- Recommended action: {proposed_fixes.fixes[0].name}, estimated {proposed_fixes.fixes[0].effort_hours} hours\n\nOutput ONE JSON object with exactly ONE key: \"summary\". The value must be a single 200-300 word prose paragraph. Do not output Severity, Root Cause, Race Conditions, or Recommended Fix as separate keys. Use the provided effort estimate exactly. Do not invent a new estimate.",
         "output_schema": {
           "type": "object",
           "required": [
@@ -356,18 +509,32 @@
           "root_cause",
           "proposed_fixes"
         ],
-        "max_tokens": 600,
+        "max_tokens": 800,
         "temperature": 0.3
       },
       "bento_config": {
         "rule_files": [
-          "python_rules"
+          "python_rules",
+          "cloud_quality_standards"
         ],
         "pressure_annealing": {
           "warn_threshold": 0.22,
           "inject_threshold": 0.42,
           "min_tokens_between_injections": 80,
           "pressure_schedule": "standard"
+        },
+        "cloud_quality": {
+          "enabled": true,
+          "teacher_review": true,
+          "preserve_free_reasoning": true,
+          "quality_dimensions": [
+            "technical_depth",
+            "specificity",
+            "causal_trace",
+            "cross_node_consistency",
+            "actionability"
+          ],
+          "min_quality_score": 0.8
         }
       },
       "depends_on": [
@@ -384,11 +551,32 @@
     "template": "Bug Report Analysis Complete",
     "fields": [
       "metadata",
-      "severity",
       "reproduction",
+      "free_reasoning",
+      "severity",
       "root_cause",
       "proposed_fixes",
       "summary"
     ]
+  },
+  "quality_config": {
+    "mode": "cloud",
+    "use_memory": true,
+    "teacher_on_success": true,
+    "final_audit": true,
+    "max_revision_rounds": 1,
+    "important_node_types": [
+      "deep_reason",
+      "adversarial",
+      "lookahead"
+    ],
+    "important_node_ids": [
+      "deep_free_reasoning",
+      "root_cause_analysis",
+      "severity_classification",
+      "proposed_fixes",
+      "executive_summary"
+    ],
+    "min_quality_score": 0.8
   }
 }

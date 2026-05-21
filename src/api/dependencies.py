@@ -26,6 +26,8 @@ from src.healing import SelfHealingOrchestrator
 from src.reasoning.adversarial_triad import AdversarialTriad
 from src.reasoning.lookahead_dag import LookaheadDAG
 from src.executor.result_weaver import ResultWeaver, StateFileWriter
+from src.quality.memory_bank import QualityMemoryBank
+from src.quality.quality_orchestrator import QualityOrchestrator
 
 # ─── Database session ──────────────────────────────────────────────────────────
 
@@ -101,8 +103,10 @@ async def get_context_surgeon() -> ContextSurgeon:
 async def get_atomic_executor(
     ollama: OllamaClient = Depends(get_ollama_client),
     surgeon: ContextSurgeon = Depends(get_context_surgeon),
+    selected_model: str = Depends(get_selected_model),
 ) -> AtomicExecutor:
     """Return an AtomicExecutor instance."""
+    ollama.model = selected_model
     return AtomicExecutor(ollama_client=ollama, context_surgeon=surgeon)
 
 
@@ -223,12 +227,46 @@ async def get_result_weaver(
     return ResultWeaver(state_writer=state_writer)
 
 
+async def get_quality_memory_bank() -> QualityMemoryBank:
+    """Return the local quality memory bank."""
+    project_root = Path(__file__).parent.parent.parent
+    db_path = project_root / "output" / "quality_memory.sqlite3"
+    bank = QualityMemoryBank(db_path=db_path)
+    await bank.initialize()
+    return bank
+
+
+async def get_quality_orchestrator(
+    memory_bank: QualityMemoryBank = Depends(get_quality_memory_bank),
+    selected_model: str = Depends(get_selected_model),
+    teacher_model: str = Depends(get_teacher_model),
+) -> QualityOrchestrator:
+    """Return the cloud-quality orchestrator."""
+    cfg = get_config()
+    local = create_ollama_client(
+        base_url=str(cfg.ollama_base_url),
+        model=selected_model,
+    )
+    teacher_base = create_ollama_client(
+        base_url=str(cfg.ollama_base_url),
+        model=selected_model,
+    )
+    teacher = TeacherClient(ollama_client=teacher_base, model=teacher_model)
+    return QualityOrchestrator(
+        memory_bank=memory_bank,
+        teacher_client=teacher,
+        local_client=local,
+        schema_validator=SchemaValidator(),
+    )
+
+
 async def get_engine(
     gate: "ConfidenceGate" = Depends(get_confidence_gate),
     weaver: ResultWeaver = Depends(get_result_weaver),
     state_writer: StateFileWriter = Depends(get_state_writer),
     registry: TemplateRegistry = Depends(get_template_registry),
     kg: KnowledgeGraphManager = Depends(get_knowledge_manager),
+    quality: QualityOrchestrator = Depends(get_quality_orchestrator),
 ) -> SpecForgeEngine:
     """Return a SpecForgeEngine singleton."""
     return SpecForgeEngine(
@@ -237,4 +275,5 @@ async def get_engine(
         state_writer=state_writer,
         template_registry=registry,
         knowledge_manager=kg,
+        quality_orchestrator=quality,
     )

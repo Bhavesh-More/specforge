@@ -183,6 +183,15 @@ class AtomicExecutor:
             input_data=input_data,
         )
 
+        memory_context = global_state.get("__quality_memory_context__")
+        if isinstance(memory_context, str) and memory_context.strip():
+            user_message = (
+                f"{user_message}\n\n"
+                f"{memory_context}\n\n"
+                "Apply the relevant memory as guidance, but keep the current task "
+                "and output schema authoritative."
+            )
+
         # Inject error feedback on retry attempts
         if attempt_number > 1 and previous_error:
             user_message = (
@@ -194,19 +203,51 @@ class AtomicExecutor:
         start_ms = time.perf_counter()
 
         # ─── DEEP REASONING PIPELINE (Person 1: SPA Layer) ──────────────────
-        # Check for deep reasoning by node_id suffix (e.g., "severity_classification_deep_reason")
-        # Nodes with this suffix use SPA + Budget Forcing + Socratic method
-        if node.node_id.endswith("_deep_reason"):
+        # Detect deep reasoning nodes either by explicit node_type == 'deep_reason'
+        # (case-insensitive) or by the legacy node_id suffix ("_deep_reason").
+        node_type_val = getattr(node, 'node_type', '') or ''
+        if hasattr(node_type_val, 'value'):
+            node_type_str = str(getattr(node_type_val, 'value', '') or '')
+        else:
+            node_type_str = str(node_type_val)
+        is_deep_reason = (node_type_str.lower() == 'deep_reason') or node.node_id.endswith("_deep_reason")
+
+        if is_deep_reason:
             try:
-                _log.info("deep_reason_node_detected", node_id=node.node_id)
-                pipeline = ReasoningPipeline(ReasoningPipelineConfig(
+                _log.info("deep_reason_node_detected", node_id=node.node_id, node_type=node_type_val)
+
+                # Build ReasoningPipelineConfig and propagate focus_prompt tuning
+                rpc = ReasoningPipelineConfig(
                     model=self._client.model,
                     ollama_base_url=self._client.base_url,
-                ))
+                )
+
+                # If focus_prompt tuning exists, map sensible fields into the
+                # budget and socratic configs to respect template intent.
+                focus = getattr(node, 'focus_prompt', None)
+                if focus:
+                    try:
+                        max_toks = int(getattr(focus, 'max_tokens', None) or getattr(focus, 'max_tokens', None) or 0)
+                    except Exception:
+                        max_toks = 0
+                    temp = None
+                    try:
+                        temp = float(getattr(focus, 'temperature', None))
+                    except Exception:
+                        temp = None
+
+                    if max_toks and rpc.budget_config:
+                        # set max_reasoning_tokens to focus max_tokens but keep min reasonable
+                        rpc.budget_config.max_reasoning_tokens = max(rpc.budget_config.min_reasoning_tokens, max_toks)
+                    if temp is not None and rpc.socratic_config:
+                        # propagate temperature to synthesis step
+                        rpc.socratic_config.synthesis_temperature = temp
+
+                pipeline = ReasoningPipeline(rpc)
                 result = await pipeline.execute(user_message, system_prompt=system_prompt)
                 await pipeline.close()
-                
-                # Check if final_answer is empty; if so, fall through to SPA/Ollama
+
+                # If the pipeline produced a final answer, return it directly.
                 if result.final_answer and result.final_answer.strip():
                     elapsed_ms = (time.perf_counter() - start_ms) * 1000
                     _log.info(

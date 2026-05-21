@@ -19,6 +19,7 @@ from pydantic import (
 
 from src.core.constants import TEMPLATE_SCHEMA_VERSION
 from src.core.exceptions import TemplateValidationError
+from src.quality.models import QualityConfig
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
@@ -32,6 +33,7 @@ class NodeType(str, enum.Enum):
     ADVERSARIAL = "adversarial"
     LOOKAHEAD = "lookahead"
     PARALLEL = "parallel"
+    DEEP_REASON = "deep_reason"
 
 
 class ExecutionTier(str, enum.Enum):
@@ -78,7 +80,7 @@ class BentoBoxConfig(BaseModel):
         pressure_annealing: Optional SPA (Self-Paced Annealing) config dict with warn_threshold, inject_threshold, etc.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="allow")
 
     rule_files: list[str] = Field(default_factory=list)
     follow_links: bool = True
@@ -173,6 +175,7 @@ class CognitiveTemplate(BaseModel):
     tags: list[str] = Field(default_factory=list)
     author: str = "anonymous"
     result_weaver: dict[str, Any] | None = None
+    quality_config: QualityConfig = Field(default_factory=QualityConfig)
 
     @field_validator("version")
     @classmethod
