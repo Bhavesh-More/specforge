@@ -20,6 +20,12 @@ from src.quality.prompts import (
     build_local_revision_prompt,
     build_memory_context,
 )
+from specforge.memory import (
+    CognitiveFailureRecord,
+    FailureType,
+    MemoryAdapter,
+    MemoryStore,
+)
 
 
 DEFAULT_QUALITY_DIMENSIONS = [
@@ -76,11 +82,15 @@ class QualityOrchestrator:
         teacher_client: TeacherClient | None,
         local_client: OllamaClient,
         schema_validator: SchemaValidator,
+        failure_memory_store: MemoryStore | None = None,
+        failure_memory_adapter: MemoryAdapter | None = None,
     ) -> None:
         self.memory_bank = memory_bank
         self.teacher_client = teacher_client
         self.local_client = local_client
         self.schema_validator = schema_validator
+        self.failure_memory_store = failure_memory_store
+        self.failure_memory_adapter = failure_memory_adapter
 
     async def prepare_node_context(
         self,
@@ -107,9 +117,28 @@ class QualityOrchestrator:
         )
         memory_context = build_memory_context(memories)
         augmented_state = dict(global_state)
-        if memory_context:
-            augmented_state["__quality_memory_context__"] = memory_context
-        return augmented_state, memories, memory_context
+        fmb_config = None
+        fmb_context = ""
+        if self.failure_memory_adapter is not None:
+            base_spa = _bento_extra(node, "pressure_annealing") or {}
+            base_scs = _bento_extra(node, "scs_config") or {}
+            fmb_config = self.failure_memory_adapter.get_adapted_config(
+                task_description=task_text,
+                node_type=_node_type_value(node),
+                base_n_drafts=int(base_scs.get("n_drafts") or 5),
+                base_inject_threshold=float(base_spa.get("inject_threshold") or 0.50),
+                base_warn_threshold=float(base_spa.get("warn_threshold") or 0.30),
+            )
+            if fmb_config.memories_used:
+                fmb_context = _build_fmb_context(fmb_config)
+                augmented_state["__fmb_adapted_config__"] = fmb_config.to_dict()
+
+        combined_context = "\n\n".join(
+            part for part in [memory_context, fmb_context] if part.strip()
+        )
+        if combined_context:
+            augmented_state["__quality_memory_context__"] = combined_context
+        return augmented_state, memories, combined_context
 
     async def maybe_improve_node_output(
         self,
@@ -235,6 +264,7 @@ class QualityOrchestrator:
         raw_output: str,
         parsed_output: dict[str, Any] | None,
         status: str,
+        error_message: str | None = None,
         quality_result: QualityRevisionResult | None = None,
     ) -> None:
         """Persist node outcome and critique memory."""
@@ -265,8 +295,24 @@ class QualityOrchestrator:
                 task_text=task_text,
                 input_hash=input_hash,
                 raw_output=raw_output,
-                error=status,
+                error=error_message or status,
             )
+            if self.failure_memory_store is not None:
+                self.failure_memory_store.save(
+                    CognitiveFailureRecord(
+                        node_type=_node_type_value(node),
+                        task_description=task_text,
+                        model_used=getattr(self.local_client, "model", ""),
+                        failure_type=_classify_failure_type(
+                            error_message or status, raw_output
+                        ),
+                        validator_error=error_message or status,
+                        failed_output=raw_output[:500],
+                        repair_attempted=True,
+                        repair_successful=False,
+                        repair_strategy_used="specforge_retry_or_healing",
+                    )
+                )
 
         if quality_result and quality_result.critique:
             await self.memory_bank.record_teacher_critique(
@@ -467,6 +513,42 @@ def _coerce_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _build_fmb_context(config: Any) -> str:
+    lines = [
+        "## Failure Memory Bank Adaptation",
+        f"- Reason: {config.adaptation_reason}",
+        f"- Confidence: {config.confidence:.0%}",
+        f"- Memories used: {config.memories_used}",
+    ]
+    if config.prompt_prefix_additions:
+        lines.append("- Prompt safeguards:")
+        lines.extend(f"  - {prefix}" for prefix in config.prompt_prefix_additions)
+    if config.spa_inject_threshold_override is not None:
+        lines.append(
+            f"- SPA inject threshold override: {config.spa_inject_threshold_override:.2f}"
+        )
+    if config.n_drafts_override is not None:
+        lines.append(f"- SCS draft override: {config.n_drafts_override}")
+    return "\n".join(lines)
+
+
+def _classify_failure_type(error_text: str, raw_output: str) -> FailureType:
+    text = f"{error_text}\n{raw_output}".lower()
+    if any(word in text for word in ["schema", "json", "required", "type", "parse"]):
+        return FailureType.SCHEMA_VIOLATION
+    if any(word in text for word in ["contradict", "inconsistent", "conflict"]):
+        return FailureType.LOGICAL_CONTRADICTION
+    if any(word in text for word in ["too short", "premature", "minimum"]):
+        return FailureType.PREMATURE_CONCLUSION
+    if any(word in text for word in ["too long", "irrelevant", "off-topic"]):
+        return FailureType.OVER_GENERATION
+    if any(word in text for word in ["hallucination", "unsupported", "drift"]):
+        return FailureType.HALLUCINATION_DRIFT
+    if any(word in text for word in ["tool", "symbolic"]):
+        return FailureType.TOOL_MISUSE
+    return FailureType.UNKNOWN
 
 
 def _preserves_final_output_detail(

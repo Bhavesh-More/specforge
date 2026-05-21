@@ -28,6 +28,7 @@ from src.reasoning.lookahead_dag import LookaheadDAG
 from src.executor.result_weaver import ResultWeaver, StateFileWriter
 from src.quality.memory_bank import QualityMemoryBank
 from src.quality.quality_orchestrator import QualityOrchestrator
+from specforge.memory import MemoryAdapter, MemoryRetriever, MemoryStore
 
 # ─── Database session ──────────────────────────────────────────────────────────
 
@@ -236,8 +237,19 @@ async def get_quality_memory_bank() -> QualityMemoryBank:
     return bank
 
 
+async def get_failure_memory_store() -> MemoryStore:
+    """Return the proactive Failure Memory Bank store."""
+    project_root = Path(__file__).parent.parent.parent
+    output_dir = project_root / "output"
+    return MemoryStore(
+        db_path=str(output_dir / "failure_memory.sqlite3"),
+        chroma_path=str(output_dir / "failure_chroma"),
+    )
+
+
 async def get_quality_orchestrator(
     memory_bank: QualityMemoryBank = Depends(get_quality_memory_bank),
+    failure_memory_store: MemoryStore = Depends(get_failure_memory_store),
     selected_model: str = Depends(get_selected_model),
     teacher_model: str = Depends(get_teacher_model),
 ) -> QualityOrchestrator:
@@ -257,6 +269,8 @@ async def get_quality_orchestrator(
         teacher_client=teacher,
         local_client=local,
         schema_validator=SchemaValidator(),
+        failure_memory_store=failure_memory_store,
+        failure_memory_adapter=MemoryAdapter(MemoryRetriever(failure_memory_store)),
     )
 
 

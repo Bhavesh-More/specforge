@@ -1,0 +1,1497 @@
+{
+  "template_id": "data_exfiltration_ir_playbook_v1",
+  "name": "Data Exfiltration Incident Response Playbook",
+  "description": "Accuracy-first SpecForge template for data exfiltration incidents. Ingests SIEM alerts, cloud audit trails (AWS CloudTrail, GCP, Azure), EDR telemetry, network captures/flow data, user activity reports, and raw log files. Produces a full IR playbook: scoped data loss assessment, precise IOC set, chronological exfiltration timeline, root cause, containment/eradication/recovery actions, DLP gap analysis, and MITRE ATT&CK Exfiltration tactic mapping. Compliance-traced to NIST SP 800-61r3, SOC 2 CC6/CC7, and GDPR Art. 33/34.",
+  "version": "1.0.0",
+  "schema_version": "1.0.0",
+  "nodes": [
+    {
+      "node_id": "gather_context",
+      "name": "Gather and Normalize Evidence",
+      "description": "Gather and Normalize Evidence",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are an incident response analyst performing evidence intake for a suspected data exfiltration incident.",
+        "user_template": "Consolidate all provided inputs into a single normalized evidence object. Extract every observable from every artifact type: IP addresses, user accounts, cloud principals (ARNs, service accounts), hostnames, file paths, data volume (bytes transferred), destination domains or IPs, process names, file hashes, timestamps, and SIEM rule names. Do not infer facts not present in the evidence. Mark any field as null if evidence is absent. If incident_id is not provided, set incident_id to \"unknown\".\n\nPrimary input:\n{description}\n\nTreat the primary input as either structured JSON or a plain text incident bundle. If structured JSON is present, copy any available keys exactly, especially incident_id, incident_title, severity, reported_at, siem_alerts, cloud_audit_trails, edr_telemetry, network_captures, user_activity_reports, raw_log_files, known_affected_users, known_affected_assets, data_classification_context, and responder_notes. If severity is present, preserve it exactly unless the input is genuinely ambiguous; only use \"unknown\" when severity cannot be determined from the input.\n\nConstraints:\n- Return only valid JSON matching the output_schema.\n- Preserve all timestamps in ISO-8601 format.\n- Do not enrich, geolocate, or speculate beyond raw evidence.\n- List every artifact type that was actually provided in evidence_sources.\n- For data volumes, always include the unit (bytes, KB, MB, GB).\n- If the same observable appears in multiple sources, list it once with all source_artifacts noted.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "incident_id",
+            "incident_title",
+            "severity",
+            "reported_at",
+            "evidence_sources",
+            "network_observables",
+            "identity_observables",
+            "data_observables",
+            "endpoint_observables",
+            "cloud_observables",
+            "raw_timestamps"
+          ],
+          "properties": {
+            "incident_id": {
+              "type": "string"
+            },
+            "incident_title": {
+              "type": "string"
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low",
+                "unknown"
+              ]
+            },
+            "reported_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "evidence_sources": {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "artifact_type": {
+                        "type": "string"
+                      },
+                      "source_name": {
+                        "type": "string"
+                      },
+                      "details": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["artifact_type"],
+                    "additionalProperties": true
+                  }
+                ]
+              },
+              "description": "Artifact sources actually provided. Accepts either plain artifact names or structured objects with artifact_type, source_name, and details."
+            },
+            "network_observables": {
+              "type": "object",
+              "properties": {
+                "source_ips": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destination_ips": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "destination_domains": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "ports_protocols": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "data_volumes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "session": {
+                        "type": "string"
+                      },
+                      "volume": {
+                        "type": "string"
+                      },
+                      "direction": {
+                        "type": "string",
+                        "enum": [
+                          "outbound",
+                          "inbound",
+                          "lateral"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "identity_observables": {
+              "type": "object",
+              "properties": {
+                "user_accounts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cloud_principals": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "privileged_accounts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "service_accounts": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "data_observables": {
+              "type": "object",
+              "properties": {
+                "file_paths_accessed": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "file_hashes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "storage_resources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "S3 buckets, GCS buckets, Azure Blob containers, NFS shares, SharePoint sites"
+                },
+                "data_classifications": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "estimated_data_volume": {
+                  "type": "string"
+                }
+              }
+            },
+            "endpoint_observables": {
+              "type": "object",
+              "properties": {
+                "hostnames": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "process_names": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "process_hashes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "staging_paths": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "removable_media": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "cloud_observables": {
+              "type": "object",
+              "properties": {
+                "api_calls": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "regions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "resource_arns": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "anomalous_api_calls": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "raw_timestamps": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "description": "Every distinct timestamp found across all evidence, sorted ascending"
+            }
+          }
+        },
+        "required_variables": [
+          "description"
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1500
+      },
+      "depends_on": [],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "gather_context"
+    },
+    {
+      "node_id": "triage",
+      "name": "Triage — Exfiltration Scope, Data Sensitivity, and Breach Classification",
+      "description": "Triage — Exfiltration Scope, Data Sensitivity, and Breach Classification",
+      "node_type": "deep_reason",
+      "focus_prompt": {
+        "system_prompt": "You are a senior data security analyst performing triage on a confirmed or suspected data exfiltration incident.",
+        "user_template": "Using the normalized evidence from gather_context, determine: (1) the likely exfiltration vector (cloud API abuse | endpoint staging + transfer | email/web upload | removable media | cloud sync client | unknown), (2) what data categories were at risk and their classification tier, (3) estimated data volume lost or at risk, (4) whether the actor appears internal (insider), external (attacker with credentials), or automated (misconfiguration / exposed service), (5) whether GDPR Art. 33 72-hour notification to DPA is likely required, (6) initial MITRE ATT&CK Exfiltration tactic category (TA0010) techniques observed, and (7) triage confidence level. Flag any evidence gaps that would change the triage assessment.\n\nInputs:\n- {gather_context.output}\n\nConstraints:\n- Return only valid JSON matching the output_schema.\n- Base every field strictly on gather_context.output — cite the specific observable that supports each conclusion.\n- Exfiltration vector must be one of the enumerated values; use 'unknown' if evidence is insufficient.\n- Actor type classification must be evidence-based, not assumed from incident title.\n- MITRE technique IDs must be from TA0010 (Exfiltration) or adjacent preparation tactics (TA0009 Collection, TA0001 Initial Access) in ATT&CK Enterprise v14+.\n- If GDPR applies, state which personal data categories are at risk.\n- List every evidence gap that materially affects scope accuracy in triage_gaps.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "exfiltration_vector",
+            "actor_type",
+            "data_at_risk",
+            "estimated_volume_lost",
+            "revised_severity",
+            "gdpr_notification_likely",
+            "mitre_exfil_techniques",
+            "triage_confidence",
+            "triage_summary",
+            "triage_gaps"
+          ],
+          "properties": {
+            "exfiltration_vector": {
+              "type": "string",
+              "enum": [
+                "cloud_api_abuse",
+                "endpoint_staging_and_transfer",
+                "email_or_web_upload",
+                "removable_media",
+                "cloud_sync_client",
+                "unknown"
+              ]
+            },
+            "actor_type": {
+              "type": "string",
+              "enum": [
+                "insider_malicious",
+                "insider_negligent",
+                "external_attacker",
+                "automated_misconfiguration",
+                "unknown"
+              ]
+            },
+            "actor_type_evidence": {
+              "type": "string",
+              "description": "The specific observable(s) that support this actor classification"
+            },
+            "data_at_risk": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "data_category",
+                  "classification_tier",
+                  "storage_resource"
+                ],
+                "properties": {
+                  "data_category": {
+                    "type": "string"
+                  },
+                  "classification_tier": {
+                    "type": "string"
+                  },
+                  "storage_resource": {
+                    "type": "string"
+                  },
+                  "personal_data": {
+                    "type": "boolean"
+                  },
+                  "gdpr_special_category": {
+                    "type": "boolean",
+                    "description": "True if Art. 9 special category data (health, biometric, etc.)"
+                  }
+                }
+              }
+            },
+            "estimated_volume_lost": {
+              "type": "string"
+            },
+            "revised_severity": {
+              "type": "string",
+              "enum": [
+                "critical",
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "gdpr_notification_likely": {
+              "type": "boolean"
+            },
+            "gdpr_personal_data_categories": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Populated only if gdpr_notification_likely is true"
+            },
+            "mitre_exfil_techniques": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "technique_id",
+                  "technique_name",
+                  "supporting_observable"
+                ],
+                "properties": {
+                  "technique_id": {
+                    "type": "string"
+                  },
+                  "technique_name": {
+                    "type": "string"
+                  },
+                  "tactic": {
+                    "type": "string"
+                  },
+                  "supporting_observable": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "triage_confidence": {
+              "type": "string",
+              "enum": [
+                "high",
+                "medium",
+                "low"
+              ]
+            },
+            "triage_summary": {
+              "type": "string",
+              "description": "3-5 sentence human-readable triage narrative"
+            },
+            "triage_gaps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "gap": {
+                    "type": "string"
+                  },
+                  "impact": {
+                    "type": "string",
+                    "description": "How this gap affects scope or classification accuracy"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required_variables": [
+          "gather_context.output"
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1500
+      },
+      "depends_on": [
+        "gather_context"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "triage"
+    },
+    {
+      "node_id": "analyze",
+      "name": "Forensic Analysis — Exfiltration Timeline, Full IOC Set, and Root Cause",
+      "description": "Forensic Analysis — Exfiltration Timeline, Full IOC Set, and Root Cause",
+      "node_type": "deep_reason",
+      "focus_prompt": {
+        "system_prompt": "You are a forensic analyst conducting a deep investigation of a data exfiltration incident.",
+        "user_template": "Using gather_context and triage outputs, reconstruct the complete exfiltration event chain with precise timestamps, extract every Indicator of Compromise, determine the root cause including the initial access or trust abuse vector, and map the full attack chain to MITRE ATT&CK techniques across all relevant tactics (Initial Access, Credential Access, Discovery, Collection, Exfiltration). Distinguish confirmed evidence from inferred hypotheses at every step.\n\nInputs:\n- {gather_context.output}\n- {triage.output}\n\nConstraints:\n- Return only valid JSON matching the output_schema.\n- Timeline events must be in strict ascending chronological order.\n- Each timeline event must be tagged as 'confirmed' (directly evidenced) or 'inferred' (logically derived but not directly observed).\n- IOCs must include: type (ip | domain | url | file_hash | user_account | cloud_principal | process | registry_key | email_address | storage_resource | other), value, source_artifact, and first/last_seen timestamps.\n- Root cause must identify the specific control failure or trust abuse that enabled the exfiltration — not just 'misconfiguration' or 'insider'.\n- Do not merge distinct events into single timeline entries; preserve granularity.\n- MITRE technique IDs must be T#### or T####.### format.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "timeline",
+            "iocs",
+            "root_cause",
+            "exfiltration_path_summary",
+            "mitre_technique_chain",
+            "data_loss_assessment"
+          ],
+          "properties": {
+            "timeline": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "timestamp",
+                  "event",
+                  "source_artifact",
+                  "confidence"
+                ],
+                "properties": {
+                  "timestamp": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "event": {
+                    "type": "string"
+                  },
+                  "actor": {
+                    "type": "string"
+                  },
+                  "asset": {
+                    "type": "string"
+                  },
+                  "source_artifact": {
+                    "type": "string"
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed",
+                      "inferred"
+                    ]
+                  },
+                  "mitre_technique": {
+                    "type": "string",
+                    "description": "T#### if this event maps to a technique"
+                  }
+                }
+              }
+            },
+            "iocs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "type",
+                  "value",
+                  "source_artifact"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  },
+                  "source_artifact": {
+                    "type": "string"
+                  },
+                  "first_seen": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "last_seen": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "confidence": {
+                    "type": "string",
+                    "enum": [
+                      "confirmed",
+                      "inferred"
+                    ]
+                  }
+                }
+              }
+            },
+            "root_cause": {
+              "type": "object",
+              "required": [
+                "primary_cause",
+                "control_failure",
+                "confidence"
+              ],
+              "properties": {
+                "primary_cause": {
+                  "type": "string"
+                },
+                "control_failure": {
+                  "type": "string",
+                  "description": "The specific security control that was absent, bypassed, or misconfigured"
+                },
+                "initial_access_vector": {
+                  "type": "string"
+                },
+                "contributing_factors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "confidence": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "medium",
+                    "low"
+                  ]
+                }
+              }
+            },
+            "exfiltration_path_summary": {
+              "type": "string",
+              "description": "Prose narrative of the full exfiltration path from initial access or staging through final data transfer"
+            },
+            "mitre_technique_chain": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "technique_id",
+                  "technique_name",
+                  "tactic",
+                  "evidence"
+                ],
+                "properties": {
+                  "technique_id": {
+                    "type": "string"
+                  },
+                  "technique_name": {
+                    "type": "string"
+                  },
+                  "tactic": {
+                    "type": "string"
+                  },
+                  "evidence": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "data_loss_assessment": {
+              "type": "object",
+              "properties": {
+                "confirmed_exfiltrated": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "data_category": {
+                        "type": "string"
+                      },
+                      "storage_resource": {
+                        "type": "string"
+                      },
+                      "volume": {
+                        "type": "string"
+                      },
+                      "destination": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "suspected_exfiltrated": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "data_category": {
+                        "type": "string"
+                      },
+                      "storage_resource": {
+                        "type": "string"
+                      },
+                      "volume": {
+                        "type": "string"
+                      },
+                      "reason_suspected": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "total_volume_confirmed": {
+                  "type": "string"
+                },
+                "total_volume_suspected": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required_variables": [
+          "gather_context.output",
+          "triage.output"
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1500
+      },
+      "depends_on": [
+        "gather_context",
+        "triage"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "analyze"
+    },
+    {
+      "node_id": "draft_response_actions",
+      "name": "Draft Containment, Eradication, and Recovery Actions",
+      "description": "Draft Containment, Eradication, and Recovery Actions",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are an incident response lead drafting the remediation playbook for a data exfiltration incident.",
+        "user_template": "Using triage scope, IOCs, root cause, and exfiltration vector from analyze, draft specific and actionable steps for: (1) Immediate containment — stop ongoing exfiltration and isolate affected identities/resources, (2) Eradication — remove threat actor access and revoke all compromised credentials or sessions, (3) Recovery — restore access controls and verify data integrity, (4) Post-recovery verification — confirm no re-exfiltration channel exists. Steps must be specific to the identified exfiltration vector and actor type, not generic.\n\nInputs:\n- {triage.output}\n- {analyze.output}\n\nConstraints:\n- Return only valid JSON matching the output_schema.\n- Each action must include: priority (immediate | short_term | long_term), owner_role (functional title, not a name), success_criteria, and requires_approval flag.\n- Containment actions must directly address the IOCs and exfiltration vector identified in analyze.\n- Do not recommend specific vendor products by name.\n- Flag any action that requires legal, HR, or executive approval with requires_approval: true and an approval_reason.\n- Verification steps must be independently testable — not just 'monitor the environment'.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "containment_actions",
+            "eradication_actions",
+            "recovery_actions",
+            "verification_steps"
+          ],
+          "properties": {
+            "containment_actions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "priority",
+                  "owner_role",
+                  "success_criteria",
+                  "requires_approval"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "immediate",
+                      "short_term",
+                      "long_term"
+                    ]
+                  },
+                  "owner_role": {
+                    "type": "string"
+                  },
+                  "success_criteria": {
+                    "type": "string"
+                  },
+                  "requires_approval": {
+                    "type": "boolean"
+                  },
+                  "approval_reason": {
+                    "type": "string"
+                  },
+                  "ioc_addressed": {
+                    "type": "string",
+                    "description": "The IOC or triage finding this action directly mitigates"
+                  }
+                }
+              }
+            },
+            "eradication_actions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "priority",
+                  "owner_role",
+                  "success_criteria",
+                  "requires_approval"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "immediate",
+                      "short_term",
+                      "long_term"
+                    ]
+                  },
+                  "owner_role": {
+                    "type": "string"
+                  },
+                  "success_criteria": {
+                    "type": "string"
+                  },
+                  "requires_approval": {
+                    "type": "boolean"
+                  },
+                  "approval_reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "recovery_actions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "priority",
+                  "owner_role",
+                  "success_criteria"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "immediate",
+                      "short_term",
+                      "long_term"
+                    ]
+                  },
+                  "owner_role": {
+                    "type": "string"
+                  },
+                  "success_criteria": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "verification_steps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "step",
+                  "owner_role",
+                  "pass_condition"
+                ],
+                "properties": {
+                  "step": {
+                    "type": "string"
+                  },
+                  "owner_role": {
+                    "type": "string"
+                  },
+                  "pass_condition": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required_variables": [
+          "triage.output",
+          "analyze.output"
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1500
+      },
+      "depends_on": [
+        "triage",
+        "analyze"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "draft_response_actions"
+    },
+    {
+      "node_id": "draft_dlp_gap_and_compliance",
+      "name": "Draft DLP Gap Analysis, Lessons Learned, and Compliance Traceability",
+      "description": "Draft DLP Gap Analysis, Lessons Learned, and Compliance Traceability",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are a data protection officer and post-incident review lead.",
+        "user_template": "Using the forensic analysis and response actions, produce: (1) A DLP and access control gap analysis identifying exactly which controls were absent or bypassed that allowed the exfiltration to occur, (2) Key lessons learned tied to specific evidence — not generic advice, (3) Concrete next actions with owner roles and 30/60/90-day target timelines to close identified gaps, (4) Compliance traceability against NIST SP 800-61r3 phases, SOC 2 CC6 (Logical Access) and CC7 (System Operations) criteria, and GDPR Art. 33/34 breach notification obligations.\n\nInputs:\n- {triage.output}\n- {analyze.output}\n- {draft_response_actions.output}\n\nConstraints:\n- Return only valid JSON matching the output_schema.\n- DLP gaps must reference the specific IOC, vector, or timeline event that exposed the gap — not abstract statements.\n- Lessons learned must be actionable — each must pair a finding with a concrete recommendation.\n- NIST 800-61r3 phases: Preparation | Detection and Analysis | Containment / Eradication / Recovery | Post-Incident Activity.\n- SOC 2 criteria should use CC6.x and CC7.x identifiers.\n- If triage.gdpr_notification_likely is true, set gdpr_art33_required to true and provide a draft notification summary.\n- Next actions must not duplicate containment or eradication steps from draft_response_actions — focus on long-term systemic improvements.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "dlp_gaps",
+            "lessons_learned",
+            "next_actions",
+            "compliance_trace"
+          ],
+          "properties": {
+            "dlp_gaps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "control_gap",
+                  "gap_category",
+                  "evidence_reference",
+                  "recommended_control"
+                ],
+                "properties": {
+                  "control_gap": {
+                    "type": "string"
+                  },
+                  "gap_category": {
+                    "type": "string",
+                    "enum": [
+                      "dlp_policy",
+                      "access_control",
+                      "monitoring_detection",
+                      "network_egress",
+                      "endpoint_control",
+                      "cloud_configuration",
+                      "process_policy"
+                    ]
+                  },
+                  "evidence_reference": {
+                    "type": "string",
+                    "description": "The IOC value, timeline event, or triage finding that exposed this gap"
+                  },
+                  "recommended_control": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "lessons_learned": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "finding",
+                  "gap_type",
+                  "recommendation"
+                ],
+                "properties": {
+                  "finding": {
+                    "type": "string"
+                  },
+                  "gap_type": {
+                    "type": "string",
+                    "enum": [
+                      "process",
+                      "technology",
+                      "people",
+                      "policy"
+                    ]
+                  },
+                  "recommendation": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "next_actions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "action",
+                  "owner_role",
+                  "target_timeline",
+                  "priority"
+                ],
+                "properties": {
+                  "action": {
+                    "type": "string"
+                  },
+                  "owner_role": {
+                    "type": "string"
+                  },
+                  "target_timeline": {
+                    "type": "string",
+                    "enum": [
+                      "0-30 days",
+                      "30-60 days",
+                      "60-90 days",
+                      "90+ days"
+                    ]
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "immediate",
+                      "short_term",
+                      "long_term"
+                    ]
+                  },
+                  "closes_gap": {
+                    "type": "string",
+                    "description": "Reference to the dlp_gap this action addresses"
+                  }
+                }
+              }
+            },
+            "compliance_trace": {
+              "type": "object",
+              "required": [
+                "nist_80061_phases",
+                "soc2_criteria",
+                "gdpr_assessment"
+              ],
+              "properties": {
+                "nist_80061_phases": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "phase",
+                      "status",
+                      "notes"
+                    ],
+                    "properties": {
+                      "phase": {
+                        "type": "string",
+                        "enum": [
+                          "Preparation",
+                          "Detection and Analysis",
+                          "Containment / Eradication / Recovery",
+                          "Post-Incident Activity"
+                        ]
+                      },
+                      "status": {
+                        "type": "string",
+                        "enum": [
+                          "completed",
+                          "in_progress",
+                          "not_started",
+                          "gap_identified"
+                        ]
+                      },
+                      "notes": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "soc2_criteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "criterion_id",
+                      "criterion_description",
+                      "control_status",
+                      "notes"
+                    ],
+                    "properties": {
+                      "criterion_id": {
+                        "type": "string"
+                      },
+                      "criterion_description": {
+                        "type": "string"
+                      },
+                      "control_status": {
+                        "type": "string",
+                        "enum": [
+                          "effective",
+                          "failed",
+                          "partial",
+                          "not_evaluated"
+                        ]
+                      },
+                      "notes": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "gdpr_assessment": {
+                  "type": "object",
+                  "required": [
+                    "gdpr_art33_required",
+                    "gdpr_art34_required"
+                  ],
+                  "properties": {
+                    "gdpr_art33_required": {
+                      "type": "boolean",
+                      "description": "72-hour DPA notification required"
+                    },
+                    "gdpr_art34_required": {
+                      "type": "boolean",
+                      "description": "Data subject notification required"
+                    },
+                    "personal_data_categories": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "special_category_data": {
+                      "type": "boolean"
+                    },
+                    "estimated_subjects_affected": {
+                      "type": "string"
+                    },
+                    "notification_deadline": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "draft_notification_summary": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required_variables": [
+          "triage.output",
+          "analyze.output",
+          "draft_response_actions.output"
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1500
+      },
+      "depends_on": [
+        "analyze",
+        "draft_response_actions"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "draft_dlp_gap_and_compliance"
+    },
+    {
+      "node_id": "validate",
+      "name": "Validate — Evidence Grounding, Internal Consistency, and Completeness Check",
+      "description": "Validate — Evidence Grounding, Internal Consistency, and Completeness Check",
+      "node_type": "adversarial",
+      "focus_prompt": {
+        "system_prompt": "You are a critical peer reviewer checking a data exfiltration incident response playbook for accuracy, consistency, and completeness.",
+        "user_template": "Review all prior node outputs and identify: (1) any IOC or timeline event not supported by gather_context evidence, (2) contradictions between triage and analyze (e.g. different actor types or volumes), (3) containment actions that do not address the identified exfiltration vector, (4) compliance fields that are logically inconsistent (e.g. gdpr_art33_required=false when personal data is confirmed exfiltrated), (5) any required playbook section that is empty or missing, (6) DLP gaps that are unsupported by the evidence. Return a structured validation report.\n\nInputs:\n- {gather_context.output}\n- {triage.output}\n- {analyze.output}\n- {draft_response_actions.output}\n- {draft_dlp_gap_and_compliance.output}\n\nConstraints:\n- Return only valid JSON matching the output_schema.\n- Only flag genuine issues — not items that are legitimately null due to absent evidence.\n- Each issue must cite the exact node_id and field_path it came from.\n- Severity: blocking (must fix before finalizing) | warning (should address) | info (minor note).\n- If no issues are found, return passed: true and an empty issues array.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "passed",
+            "blocking_count",
+            "warning_count",
+            "issues",
+            "validation_summary"
+          ],
+          "properties": {
+            "passed": {
+              "type": "boolean"
+            },
+            "blocking_count": {
+              "type": "integer"
+            },
+            "warning_count": {
+              "type": "integer"
+            },
+            "issues": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "severity",
+                  "node_id",
+                  "field_path",
+                  "description",
+                  "suggested_fix"
+                ],
+                "properties": {
+                  "severity": {
+                    "type": "string",
+                    "enum": [
+                      "blocking",
+                      "warning",
+                      "info"
+                    ]
+                  },
+                  "node_id": {
+                    "type": "string"
+                  },
+                  "field_path": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "suggested_fix": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "validation_summary": {
+              "type": "string"
+            }
+          }
+        },
+        "required_variables": [
+          "gather_context.output",
+          "triage.output",
+          "analyze.output",
+          "draft_response_actions.output",
+          "draft_dlp_gap_and_compliance.output"
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1500
+      },
+      "depends_on": [
+        "gather_context",
+        "triage",
+        "analyze",
+        "draft_response_actions",
+        "draft_dlp_gap_and_compliance"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "validate"
+    },
+    {
+      "node_id": "finalize",
+      "name": "Finalize — Assemble Complete Data Exfiltration IR Playbook",
+      "description": "Finalize — Assemble Complete Data Exfiltration IR Playbook",
+      "node_type": "standard",
+      "focus_prompt": {
+        "system_prompt": "You are the incident commander assembling the final Data Exfiltration Incident Response Playbook.",
+        "user_template": "Assemble all node outputs into a complete, structured playbook. Every required section must appear in order. Write a non-technical executive_summary (≤200 words) suitable for a CISO or board-level audience. If validate.blocking_count > 0, set playbook_status to 'draft_with_caveats' and list every blocking issue in caveats. Populate all sections from prior node outputs without paraphrasing — assemble, do not re-derive.\n\nInputs:\n- {gather_context.output}\n- {triage.output}\n- {analyze.output}\n- {draft_response_actions.output}\n- {draft_dlp_gap_and_compliance.output}\n- {validate.output}\n\nConstraints:\n- Return only valid JSON matching the output_schema.\n- Do not omit any required section.\n- Do not reproduce raw log content — reference by artifact type only.\n- All timestamps must be ISO-8601.\n- Executive summary must be self-contained and accurate for a non-technical audience.\n- playbook_status must reflect validate.passed: if true → 'final', if false → 'draft_with_caveats'.\n- The ioc_blocklist_export array must contain only confirmed IOCs from analyze — suitable for direct import into a blocklist or SIEM rule.",
+        "output_schema": {
+          "type": "object",
+          "required": [
+            "playbook_id",
+            "playbook_status",
+            "generated_at",
+            "executive_summary",
+            "incident_overview",
+            "exfiltration_scope",
+            "timeline",
+            "indicators_of_compromise",
+            "ioc_blocklist_export",
+            "root_cause_analysis",
+            "exfiltration_path",
+            "containment",
+            "eradication",
+            "recovery",
+            "verification",
+            "mitre_attack_mapping",
+            "dlp_gap_analysis",
+            "lessons_learned",
+            "next_actions",
+            "compliance_traceability",
+            "caveats"
+          ],
+          "properties": {
+            "playbook_id": {
+              "type": "string"
+            },
+            "playbook_status": {
+              "type": "string",
+              "enum": [
+                "final",
+                "draft_with_caveats"
+              ]
+            },
+            "generated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "executive_summary": {
+              "type": "string",
+              "description": "≤200 words. Non-technical. Covers: what happened, what data was at risk, immediate actions taken, and next steps."
+            },
+            "incident_overview": {
+              "type": "object",
+              "properties": {
+                "incident_id": {
+                  "type": "string"
+                },
+                "incident_title": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string"
+                },
+                "reported_at": {
+                  "type": "string"
+                },
+                "actor_type": {
+                  "type": "string"
+                },
+                "exfiltration_vector": {
+                  "type": "string"
+                },
+                "triage_confidence": {
+                  "type": "string"
+                }
+              }
+            },
+            "exfiltration_scope": {
+              "type": "object",
+              "properties": {
+                "confirmed_data_lost": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "suspected_data_lost": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "total_volume_confirmed": {
+                  "type": "string"
+                },
+                "total_volume_suspected": {
+                  "type": "string"
+                }
+              }
+            },
+            "timeline": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "indicators_of_compromise": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "ioc_blocklist_export": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Confirmed IOCs only — clean list for SIEM/firewall import"
+            },
+            "root_cause_analysis": {
+              "type": "object",
+              "properties": {
+                "primary_cause": {
+                  "type": "string"
+                },
+                "control_failure": {
+                  "type": "string"
+                },
+                "initial_access_vector": {
+                  "type": "string"
+                },
+                "contributing_factors": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "confidence": {
+                  "type": "string"
+                }
+              }
+            },
+            "exfiltration_path": {
+              "type": "string"
+            },
+            "containment": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "eradication": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "recovery": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "verification": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "mitre_attack_mapping": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "dlp_gap_analysis": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "lessons_learned": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "next_actions": {
+              "type": "array",
+              "items": {
+                "type": "object"
+              }
+            },
+            "compliance_traceability": {
+              "type": "object",
+              "properties": {
+                "nist_80061_phases": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "soc2_criteria": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "gdpr_assessment": {
+                  "type": "object"
+                }
+              }
+            },
+            "caveats": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Blocking validation issues carried forward — empty if playbook_status is 'final'"
+            }
+          }
+        },
+        "required_variables": [
+          "gather_context.output",
+          "triage.output",
+          "analyze.output",
+          "draft_response_actions.output",
+          "draft_dlp_gap_and_compliance.output",
+          "validate.output"
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.3
+      },
+      "bento_config": {
+        "rule_files": [],
+        "follow_links": true,
+        "max_depth": 2,
+        "token_budget": 1500
+      },
+      "depends_on": [
+        "gather_context",
+        "triage",
+        "analyze",
+        "draft_response_actions",
+        "draft_dlp_gap_and_compliance",
+        "validate"
+      ],
+      "can_run_parallel": false,
+      "max_retries": 2,
+      "symbolic_tool": null,
+      "output_key": "finalize"
+    }
+  ],
+  "created_at": "2026-05-21T12:24:14.460397+00:00",
+  "updated_at": "2026-05-21T12:24:14.460397+00:00",
+  "tags": [
+    "data-exfiltration",
+    "dlp",
+    "insider-threat",
+    "cloud-security",
+    "mitre-attack",
+    "nist-800-61",
+    "soc2",
+    "gdpr",
+    "incident-response"
+  ],
+  "author": "claude-skill"
+}

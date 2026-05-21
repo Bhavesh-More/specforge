@@ -27,6 +27,7 @@ from src.healing.rule_patcher import RulePatcher
 from src.healing import SelfHealingOrchestrator
 from src.quality.memory_bank import QualityMemoryBank
 from src.quality.quality_orchestrator import QualityOrchestrator
+from specforge.memory import MemoryAdapter, MemoryRetriever, MemoryStore
 from src.symbolic.mcp_client import MCPClient
 from src.symbolic.symbolic_node import SymbolicNodeExecutor
 from src.symbolic.tool_registry import ToolRegistry
@@ -136,11 +137,17 @@ def _build_engine() -> SpecForgeEngine:
     # The memory bank lazily initializes again during first use in the web path,
     # but Celery builds synchronously, so create the table here.
     memory_bank._initialize_sync()
+    failure_memory_store = MemoryStore(
+        db_path=str(Path("output") / "failure_memory.sqlite3"),
+        chroma_path=str(Path("output") / "failure_chroma"),
+    )
     quality = QualityOrchestrator(
         memory_bank=memory_bank,
         teacher_client=teacher,
         local_client=ollama,
         schema_validator=validator,
+        failure_memory_store=failure_memory_store,
+        failure_memory_adapter=MemoryAdapter(MemoryRetriever(failure_memory_store)),
     )
 
     return SpecForgeEngine(

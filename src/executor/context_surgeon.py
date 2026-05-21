@@ -211,6 +211,18 @@ class ContextSurgeon:
         combined.update(input_data)
         combined.update(global_state)
 
+        # Many templates expect a single bundled `description` input, but some
+        # callers send a structured top-level payload instead. When the template
+        # asks for `description` and it is missing, synthesize it from the full
+        # input payload so templates can support both input styles.
+        if "description" not in combined and input_data:
+            combined["description"] = json.dumps(
+                input_data,
+                separators=(",", ":"),
+                default=str,
+                ensure_ascii=False,
+            )
+
         _log.debug(
             "node_input_resolution",
             node_id=node.node_id,
@@ -290,6 +302,9 @@ class ContextSurgeon:
             full_key = f"{prefix}.{key}" if prefix else key
             flat[full_key] = value
             if isinstance(value, dict):
+                # Expose node outputs as both `node_id` and `node_id.output` so
+                # templates can reference the full payload or its fields.
+                flat[f"{full_key}.output"] = value
                 flat.update(self._flatten_variables(value, prefix=full_key))
         return flat
 
@@ -333,7 +348,7 @@ class ContextSurgeon:
                 )
             value = variables[key]
             if isinstance(value, (dict, list)):
-                return json.dumps(value, indent=2)
+                return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
             return str(value)
 
         return TEMPLATE_VAR_PATTERN.sub(replacer, template)

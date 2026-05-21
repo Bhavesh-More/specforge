@@ -155,8 +155,9 @@ class OllamaConnectionError(SpecForgeError):
         original_exc: Exception | None = None,
         context: dict | None = None,
     ) -> None:
+        detail = f": {original_exc}" if original_exc is not None else ""
         super().__init__(
-            message=f"Cannot connect to Ollama at {base_url}",
+            message=f"Cannot connect to Ollama at {base_url}{detail}",
             code="OLLAMA_CONNECTION_ERROR",
             context=context,
         )

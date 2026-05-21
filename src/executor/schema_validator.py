@@ -617,4 +617,119 @@ def _post_process_repair(parsed_output: dict[str, Any], json_schema: dict[str, A
         # be conservative: don't raise on repair attempts
         pass
 
+    def _schema_allows_type(schema: dict[str, Any], type_name: str) -> bool:
+        if not isinstance(schema, dict):
+            return False
+
+        # Handle composition keywords used heavily in template schemas.
+        for key in ("anyOf", "oneOf", "allOf"):
+            options = schema.get(key)
+            if isinstance(options, list):
+                return any(
+                    isinstance(opt, dict) and _schema_allows_type(opt, type_name)
+                    for opt in options
+                )
+
+        schema_type = schema.get("type")
+        if isinstance(schema_type, list):
+            return type_name in schema_type
+        return schema_type == type_name
+
+    def _object_satisfies_required(value: Any, schema: dict[str, Any]) -> bool:
+        if not isinstance(value, dict):
+            return False
+        required = schema.get("required")
+        if not isinstance(required, list):
+            return True
+        return all(key in value for key in required)
+
+    def _coerce_value_to_string(value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            # Preserve concise incident artifact semantics when available.
+            artifact_type = value.get("artifact_type")
+            source_name = value.get("source_name")
+            details = value.get("details")
+            if isinstance(artifact_type, str) and artifact_type.strip():
+                parts = [artifact_type.strip()]
+                if isinstance(source_name, str) and source_name.strip():
+                    parts.append(f"source={source_name.strip()}")
+                if isinstance(details, str) and details.strip():
+                    parts.append(f"details={details.strip()}")
+                return " | ".join(parts)
+        # Fallback to compact JSON so structure is not lost.
+        return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+
+    def _repair_by_schema(value: Any, schema: dict[str, Any]) -> Any:
+        if not isinstance(schema, dict):
+            return value
+
+        # Resolve composition schemas conservatively.
+        for key in ("anyOf", "oneOf"):
+            options = schema.get(key)
+            if isinstance(options, list) and options:
+                if isinstance(value, str):
+                    # Strings are already acceptable if any branch allows string.
+                    if any(isinstance(opt, dict) and _schema_allows_type(opt, "string") for opt in options):
+                        return value
+
+                if isinstance(value, dict):
+                    # Keep object only when it satisfies an object branch's required keys.
+                    for opt in options:
+                        if isinstance(opt, dict) and _schema_allows_type(opt, "object"):
+                            if _object_satisfies_required(value, opt):
+                                return _repair_by_schema(value, opt)
+
+                    # Object is malformed for object branches; if string branch exists, coerce.
+                    if any(isinstance(opt, dict) and _schema_allows_type(opt, "string") for opt in options):
+                        return _coerce_value_to_string(value)
+
+                # Primitive mismatch with available string branch.
+                if any(isinstance(opt, dict) and _schema_allows_type(opt, "string") for opt in options):
+                    return _coerce_value_to_string(value)
+
+                # Fall back to first branch for recursive repair attempts.
+                first_opt = next((opt for opt in options if isinstance(opt, dict)), None)
+                if first_opt is not None:
+                    return _repair_by_schema(value, first_opt)
+                return value
+
+        schema_type = schema.get("type")
+        if isinstance(schema_type, list):
+            schema_type = next((t for t in schema_type if t != "null"), schema_type[0] if schema_type else None)
+
+        if schema_type == "object" and isinstance(value, dict):
+            props = schema.get("properties") or {}
+            repaired_obj = dict(value)
+            for k, child_schema in props.items():
+                if k in repaired_obj and isinstance(child_schema, dict):
+                    repaired_obj[k] = _repair_by_schema(repaired_obj[k], child_schema)
+            return repaired_obj
+
+        if schema_type == "array" and isinstance(value, list):
+            item_schema = schema.get("items") if isinstance(schema.get("items"), dict) else None
+            if not item_schema:
+                return value
+
+            if _schema_allows_type(item_schema, "string"):
+                # If schema allows strings but not objects/arrays, normalize non-string items.
+                allows_object = _schema_allows_type(item_schema, "object")
+                allows_array = _schema_allows_type(item_schema, "array")
+                repaired_items: list[Any] = []
+                for item in value:
+                    if isinstance(item, str):
+                        repaired_items.append(item)
+                    elif (isinstance(item, dict) and allows_object) or (isinstance(item, list) and allows_array):
+                        repaired_items.append(_repair_by_schema(item, item_schema))
+                    else:
+                        repaired_items.append(_coerce_value_to_string(item))
+                return repaired_items
+
+            return [_repair_by_schema(item, item_schema) for item in value]
+
+        return value
+
+    repaired = _repair_by_schema(repaired, json_schema)
+
     return repaired

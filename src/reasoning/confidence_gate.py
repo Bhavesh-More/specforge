@@ -431,6 +431,7 @@ class SpecForgeEngine:
                             raw_output=result.raw_output,
                             parsed_output=result.parsed_output,
                             status=result.status.value,
+                            error_message=result.error_message,
                             quality_result=quality_result,
                         )
                     except Exception as exc:
